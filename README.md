@@ -36,7 +36,7 @@ https://t.me/richtitan
 
 
 
-credits:
+Credits:
 
 HAProxy: https://github.com/xjoker/HAProxyForWindows
 
