@@ -8,7 +8,7 @@
 
 -Choose your bridge type 
 
--choose either "fast" or "stable" configuration
+-Choose to connect with either "fast" or "stable" configuration
 
 -after the process is complete you can either choose to launch v2rayN with a premade configuration to connect to the multiplexer
 or you can use your own proxy management app.
