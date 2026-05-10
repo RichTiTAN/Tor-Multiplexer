@@ -30,5 +30,6 @@ CONNECT (Fast config)
 v2rayN
 به کانفیگ از قبل ایجاد شده متصل بشید
 
-Made with love by @RichTitan on telegram
+Made with love by @RichTitan
+
 https://t.me/richtitan
