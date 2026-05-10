@@ -17,9 +17,9 @@ or you can use your own proxy management app.
 اجرا کنید
 
 -سپس یکی از دو گزینه 
-"Start with Fast configuration"
+CONNECT (Stable config)
 یا
-"Start with Stable configuration"
+CONNECT (Fast config)
 را انتخاب کنید
 
 -بعد از اتمام مراحل اجرا میتوانید از طریق 
