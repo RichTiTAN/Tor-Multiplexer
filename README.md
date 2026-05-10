@@ -1,5 +1,5 @@
-# Tor-Multiplexer For Windows
-  Just a Multiplexer that combines 8 seperate tor connections
+# Tor Multiplexer For Windows
+  A windows tool to run multiple tor engines and load balance them with HAProxy.
 
   
   How to use:
