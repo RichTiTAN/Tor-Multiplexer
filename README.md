@@ -1,11 +1,17 @@
 # Tor-Multiplexer
-Just a Multiplexer that runs 8 tor connections with meek-lite bridge
-How to use:
+  Just a Multiplexer that runs 8 tor connections with meek-lite bridge.
+
+  
+  How to use:
+
 Launch the program with "Launch Multiplexer"
+
 choose either "fast" or "stable" configuration
+
 after the process is complete you can either choose to launch v2rayN with a premade configuration to connect to the multiplexer
-or you can use your own proxy management app
-.
+or you can use your own proxy management app.
+  
+
 ابتدا برنامه را با اجرای فایل
 "Launch Multiplexer"
 اجرا کنید
