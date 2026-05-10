@@ -4,29 +4,29 @@
   
   How to use:
 
-- Launch the program with "Launch Multiplexer"
+1- Launch the program with "Launch Multiplexer"
 
-- Choose your bridge type 
+2- Choose your bridge type 
 
-- Choose to connect with either "fast" or "stable" configuration
+3- Choose to connect with either "fast" or "stable" configuration
 
-- after the process is complete you can either choose to launch v2rayN with a premade configuration to connect to the multiplexer
+4- after the process is complete you can either choose to launch v2rayN with a premade configuration to connect to the multiplexer
 or you can use your own proxy management app.
   
 
-- ابتدا برنامه را با اجرای فایل
+1- ابتدا برنامه را با اجرای فایل
 "Launch Multiplexer"
 اجرا کنید
 
-- سپس یکی از دو گزینه 
+2- سپس یکی از دو گزینه 
 CONNECT (Stable config)
 یا
 CONNECT (Fast config)
 را انتخاب کنید
 
-- ترجیحا Bridge Type را تغییر ندهید.
+3- ترجیحا Bridge Type را تغییر ندهید.
 
-- بعد از اتمام مراحل اجرا میتوانید از طریق 
+4- بعد از اتمام مراحل اجرا میتوانید از طریق 
 v2rayN
 به کانفیگ از قبل ایجاد شده متصل بشید
 
