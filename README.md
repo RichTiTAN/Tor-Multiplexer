@@ -31,3 +31,4 @@ v2rayN
 به کانفیگ از قبل ایجاد شده متصل بشید
 
 Made with love by @RichTitan on telegram
+https://t.me/richtitan
