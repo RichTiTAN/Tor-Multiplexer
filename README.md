@@ -6,6 +6,8 @@
 
 -Launch the program with "Launch Multiplexer"
 
+-Choose your bridge type 
+
 -choose either "fast" or "stable" configuration
 
 -after the process is complete you can either choose to launch v2rayN with a premade configuration to connect to the multiplexer
@@ -21,6 +23,8 @@ CONNECT (Stable config)
 یا
 CONNECT (Fast config)
 را انتخاب کنید
+
+-ترجیحا Bridge Type را تغییر ندهید.
 
 -بعد از اتمام مراحل اجرا میتوانید از طریق 
 v2rayN
