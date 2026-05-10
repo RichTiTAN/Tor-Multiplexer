@@ -1,5 +1,5 @@
 # Tor-Multiplexer For Windows
-  Just a Multiplexer that runs 8 tor connections with meek-lite bridge.
+  Just a Multiplexer that combines 8 seperate tor connections
 
   
   How to use:
