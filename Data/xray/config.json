@@ -1,0 +1,52 @@
+{
+    "routing":  {
+                    "rules":  [
+                                  {
+                                      "ip":  [
+                                                 "127.0.0.0/8",
+                                                 "::1",
+                                                 "10.0.0.0/8",
+                                                 "172.16.0.0/12",
+                                                 "192.168.0.0/16"
+                                             ],
+                                      "outboundTag":  "direct",
+                                      "type":  "field"
+                                  }
+                              ],
+                    "domainStrategy":  "AsIs"
+                },
+    "outbounds":  [
+                      {
+                          "protocol":  "socks",
+                          "tag":  "proxy",
+                          "settings":  {
+                                           "servers":  [
+                                                           {
+                                                               "port":  10800,
+                                                               "address":  "127.0.0.1"
+                                                           }
+                                                       ]
+                                       }
+                      },
+                      {
+                          "protocol":  "freedom",
+                          "tag":  "direct",
+                          "settings":  {
+
+                                       }
+                      }
+                  ],
+    "inbounds":  [
+                     {
+                         "port":  10818,
+                         "protocol":  "mixed",
+                         "settings":  {
+                                          "udp":  true
+                                      },
+                         "listen":  "127.0.0.1"
+                     }
+                 ],
+    "log":  {
+                "logLevel":  "warning"
+            }
+}
