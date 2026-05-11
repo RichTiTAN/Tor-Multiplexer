@@ -1,5 +1,6 @@
 # Tor Multiplexer For Windows
   A windows tool to run multiple tor engines and load balance them with HAProxy.
+  Tor but faster!
   
 <img width="601" height="382" alt="Screenshot 2026-05-11 214452" src="https://github.com/user-attachments/assets/035b80eb-b49e-485b-ad17-426c5703856b" /> <img width="600" height="383" alt="Screenshot 2026-05-11 214323" src="https://github.com/user-attachments/assets/f5a45146-62e0-4db5-b35b-99fd9dd8fca3" />
 
@@ -11,7 +12,7 @@
   How it works:
 
   - The backbone of this software are 8 tor engines, connected together using a tool called HAProxy for load-balancing.
-  - v2rayN is also included in the app for easier management of the proxy.
+  - xray core is also included in the app for easier management of the proxy.
   - This app was made to bypass internet restrictions in heavily restricted areas and because speed is a major concern I thought of putting together a tool that automates the load balancing process for higher speeds in those regions.
     
   How to use:
