@@ -47,4 +47,6 @@ HAProxy: https://github.com/xjoker/HAProxyForWindows
 
 v2rayN: https://github.com/2dust/v2rayN
 
+xray: https://github.com/xtls/xray-core
+
 Tor: https://www.torproject.org/
