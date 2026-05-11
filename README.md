@@ -1,7 +1,9 @@
 # Tor Multiplexer For Windows
   A windows tool to run multiple tor engines and load balance them with HAProxy.
   
-<img width="398" height="531" alt="image" src="https://github.com/user-attachments/assets/4a4a9fea-381f-4326-a4c6-78aaeb21dfda" /> <img width="402" height="532" alt="image" src="https://github.com/user-attachments/assets/e9e6b45b-4857-4931-a323-ff5ddcb9db4f" />
+<img width="601" height="382" alt="Screenshot 2026-05-11 214452" src="https://github.com/user-attachments/assets/035b80eb-b49e-485b-ad17-426c5703856b" /> <img width="600" height="383" alt="Screenshot 2026-05-11 214323" src="https://github.com/user-attachments/assets/f5a45146-62e0-4db5-b35b-99fd9dd8fca3" />
+
+
 
 
 
@@ -14,31 +16,24 @@
     
   How to use:
 
+!!It is recommended to keep the default settings unless you want to change the bridge type!!
+
 1- Launch the program with "Launch Multiplexer"
 
-2- Choose your bridge type 
+2- Choose your bridge type and configuration and the amount of tor engines you want to run
 
-3- Choose to connect with either "fast" or "stable" configuration
+3- Press connect
 
-4- after the process is complete you can either choose to launch v2rayN with a premade configuration to connect to the multiplexer
-or you can use your own proxy management app.
+!!Proxy mode enables a system-wide proxy and Clear proxy gives you a local proxy port so you can use your own proxy management app!!
   
 
 1- ابتدا برنامه را با اجرای فایل
 "Launch Multiplexer"
 اجرا کنید
 
-2- سپس یکی از دو گزینه 
-CONNECT (Stable config)
-یا
-CONNECT (Fast config)
-را انتخاب کنید
+2- سپس گزینه "Connect" را انتخاب کنید
 
-3- ترجیحا Bridge Type را تغییر ندهید.
-
-4- بعد از اتمام مراحل اجرا میتوانید از طریق 
-v2rayN
-به کانفیگ از قبل ایجاد شده متصل بشید
+3- گزینه Proxy mode پروکسی سیستم شما را فعال میکند و میتوانید در هر اپلیکیشنی از آن استفاده کنید. گزینه Clear proxy به شما پورت داخلی برای استفاده در اپلیکیشن پروکسی شخصی شما میدهد. 
 
 Made with love by @RichTitan
 
