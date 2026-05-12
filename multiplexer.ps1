@@ -354,7 +354,8 @@ function Update-Application {
                     Stop-AllEngines $true
                     $remoteCode | Set-Content -Path $global:scriptPath -Encoding UTF8 -Force
                     $vbsPath = Join-Path $global:baseDir "Launch Multiplexer.vbs"
-                    Start-Process "wscript.exe" -ArgumentList "`"$vbsPath`""
+                    Start-Process -FilePath "wscript.exe" -ArgumentList "`"$vbsPath`"" -WorkingDirectory $global:baseDir
+                    Start-Sleep -Milliseconds 500
                     [Environment]::Exit(0)
                 }
             } else { [System.Windows.Forms.MessageBox]::Show("You are already on the latest version!`n(Local: $global:currentVersion, Remote: $remoteVer)", "Up to Date", 0, 64) }
@@ -379,7 +380,8 @@ $comboBridge.Add_DrawItem($paintCombo); $comboConfig.Add_DrawItem($paintCombo); 
 $toggleAction = {
     param($mode); if ($global:lastXrayMode -ne $mode) {
         $global:lastXrayMode = $mode; Update-RoutingToggle
-        Save-Config
+        $selConfig = if ($comboConfig.SelectedItem.ToString() -match "Stable") { "Stable" } else { "Fast" }; $selCount = [int]($comboCount.SelectedItem.ToString().Replace(" (default)", ""))
+        @{ AutoStart = [bool]$autoStart; LaunchOnBoot = [bool]$launchOnBoot; LastConfig = $selConfig; SelectedBridge = $comboBridge.SelectedItem; InstanceCount = $selCount; XrayMode = $mode; ManualSplit = $txtSplit.Text; CustomBridgeLine = $global:customBridgeLine; EnableV2rayChain = $global:enableV2rayChain; V2rayChainJson = $global:v2rayChainJson } | ConvertTo-Json -Depth 10 | Set-Content $cfgFile
         if ($global:isConnected) { Restart-Xray $mode }
     }
 }
