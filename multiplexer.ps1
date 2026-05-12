@@ -5,6 +5,10 @@ Add-Type -AssemblyName System.Drawing
 $global:baseDir = $PSScriptRoot
 if ([string]::IsNullOrEmpty($global:baseDir)) { $global:baseDir = (Get-Location).Path }
 
+$global:scriptPath = $PSCommandPath
+if ([string]::IsNullOrEmpty($global:scriptPath)) { $global:scriptPath = $MyInvocation.MyCommand.Path }
+if ([string]::IsNullOrEmpty($global:scriptPath)) { $global:scriptPath = Join-Path $global:baseDir "multiplexer.ps1" }
+
 # --- SYSTEM PROXY REFRESH API ---
 if (-not ("Win32.WinInet" -as [type])) {
     $MethodDefinition = @'
@@ -15,7 +19,7 @@ if (-not ("Win32.WinInet" -as [type])) {
 }
 
 # --- VERSION CONTROL ---
-$global:currentVersion = "4.1.4" 
+$global:currentVersion = "4.1.5" 
 $repoRawUrl = "https://raw.githubusercontent.com/RichTiTAN/Tor-Multiplexer/main/multiplexer.ps1"
 
 # --- GLOBAL BOOT FLAG & STATE ---
@@ -134,6 +138,7 @@ function Show-V2rayDialog {
     $dlg.Dispose(); return $false
 }
 
+
 # --- UI LAYOUT: BASE ELEMENTS ---
 $lblBridge = New-Object Windows.Forms.Label; $lblBridge.Location = "20, 15"; $lblBridge.Size = "170, 20"; $lblBridge.Text = "Bridge Type:"; $lblBridge.ForeColor = "#A0AEC0"; $lblBridge.Font = $smallFont
 $comboBridge = New-Object Windows.Forms.ComboBox; $comboBridge.Location = "20, 35"; $comboBridge.Size = "170, 25"; $comboBridge.DropDownStyle = "DropDownList"; $comboBridge.FlatStyle = "Flat"; $comboBridge.BackColor = "#2D3748"; $comboBridge.ForeColor = "#E2E8F0"; $comboBridge.Font = $smallFont; $comboBridge.DrawMode = "OwnerDrawFixed"; $comboBridge.ItemHeight = 20
@@ -158,7 +163,7 @@ $null = $comboCount.Items.AddRange(@("1","2","3","4","5","6 (default)","7","8"))
 $chkAutoStart = New-Object Windows.Forms.CheckBox; $chkAutoStart.Location = "20, 80"; $chkAutoStart.Size = "250, 20"; $chkAutoStart.Text = "Auto-connect after launch"; $chkAutoStart.ForeColor = "#F6AD55"; $chkAutoStart.Font = $smallFont; $chkAutoStart.Checked = $autoStart; $chkAutoStart.FlatStyle = "Flat" 
 $chkShowAdvanced = New-Object Windows.Forms.CheckBox; $chkShowAdvanced.Location = "20, 105"; $chkShowAdvanced.Size = "250, 20"; $chkShowAdvanced.Text = "Show Advanced Options"; $chkShowAdvanced.ForeColor = "#A0AEC0"; $chkShowAdvanced.Font = $smallFont; $chkShowAdvanced.FlatStyle = "Flat" 
 
-# Right-side Action & Proxy Buttons (Perfectly Spaced)
+# Right-side Action & Proxy Buttons
 $btnProxyMode = New-Object Windows.Forms.Button; $btnProxyMode.Location = "270, 75"; $btnProxyMode.Size = "148, 30"; $btnProxyMode.FlatStyle = "Flat"; $btnProxyMode.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnProxyMode 8; $btnProxyMode.Text = "Proxy Mode"; $btnProxyMode.Font = $smallFont; $btnProxyMode.Cursor = "Hand"
 $btnClearProxy = New-Object Windows.Forms.Button; $btnClearProxy.Location = "422, 75"; $btnClearProxy.Size = "148, 30"; $btnClearProxy.FlatStyle = "Flat"; $btnClearProxy.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnClearProxy 8; $btnClearProxy.Text = "Clear Proxy"; $btnClearProxy.Font = $smallFont; $btnClearProxy.Cursor = "Hand"
 
@@ -168,7 +173,7 @@ function Update-RoutingToggle {
 }
 Update-RoutingToggle 
 
-# Connect Button precisely 4 pixels below the proxy mode buttons (Y: 109)
+# Connect Button precisely 4 pixels below the proxy mode buttons
 $btnAction = New-Object Windows.Forms.Button; $btnAction.Location = "270, 109"; $btnAction.Size = "300, 60"; $btnAction.BackColor = $colorBtn; $btnAction.ForeColor = $colorText; $btnAction.FlatStyle = "Flat"; $btnAction.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnAction 15; $btnAction.Text = ""; $btnAction.Cursor = [System.Windows.Forms.Cursors]::Hand
 
 $btnAction.Add_Paint({
@@ -233,16 +238,14 @@ function Update-Application {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         $remoteCode = Invoke-RestMethod -Uri $repoRawUrl -UseBasicParsing
         
-        # Regex fix: properly escape the $ symbol
         if ($remoteCode -match '\$global:currentVersion\s*=\s*"([^"]+)"') {
             $remoteVer = $matches[1]
             if ([version]$remoteVer -gt [version]$global:currentVersion) {
                 if ([System.Windows.Forms.MessageBox]::Show("Version $remoteVer is available! Update now?", "Update Found", 4, 64) -eq "Yes") {
                     Stop-AllEngines
                     
-                    # Direct force overwrite of local file
-                    $targetPath = Join-Path $global:baseDir "multiplexer.ps1"
-                    $remoteCode | Set-Content -Path $targetPath -Encoding UTF8 -Force
+                    # Direct memory overwrite
+                    $remoteCode | Set-Content -Path $global:scriptPath -Encoding UTF8 -Force
                     
                     [System.Windows.Forms.MessageBox]::Show("Update successful! Please restart the application.", "Success", 0, 64)
                     [Environment]::Exit(0)
@@ -351,7 +354,10 @@ function Set-SystemProxy($enable) {
     $path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
     if ($enable) { Set-ItemProperty $path -Name "ProxyEnable" -Value 1; Set-ItemProperty $path -Name "ProxyServer" -Value "127.0.0.1:10818" } 
     else { Set-ItemProperty $path -Name "ProxyEnable" -Value 0 }
-    $WinInet::InternetSetOption([IntPtr]::Zero, 39, [IntPtr]::Zero, 0) | Out-Null; $WinInet::InternetSetOption([IntPtr]::Zero, 37, [IntPtr]::Zero, 0) | Out-Null
+    
+    # --- BUG FIX: WinInet type declaration ---
+    [Win32.WinInet]::InternetSetOption([IntPtr]::Zero, 39, [IntPtr]::Zero, 0) | Out-Null
+    [Win32.WinInet]::InternetSetOption([IntPtr]::Zero, 37, [IntPtr]::Zero, 0) | Out-Null
 }
 
 function Restart-Xray($targetMode) {
