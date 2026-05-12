@@ -19,7 +19,7 @@ if (-not ("Win32.WinInet" -as [type])) {
 }
 
 # --- VERSION CONTROL ---
-$global:currentVersion = "4.2.0" 
+$global:currentVersion = "4.2" 
 $repoRawUrl = "https://raw.githubusercontent.com/RichTiTAN/Tor-Multiplexer/main/multiplexer.ps1"
 
 # --- GLOBAL BOOT FLAG & STATE ---
@@ -352,21 +352,15 @@ function Update-Application {
             if ([version]$remoteVer -gt [version]$global:currentVersion) {
                 if ([System.Windows.Forms.MessageBox]::Show("Version $remoteVer is available! Update now?", "Update Found", 4, 64) -eq "Yes") {
                     
-                    # 1. Safely stop all engines without triggering a UI redraw loop
                     Stop-AllEngines $true
-                    
-                    # 2. Detach the FormClosing event so it doesn't double-fire when we force exit
                     $form.FormClosing.Clear()
                     
-                    # 3. Direct memory overwrite
-                    $remoteCode | Set-Content -Path $global:scriptPath -Encoding UTF8 -Force
+                    # 100% bomb-proof .NET UTF-8 save, exactly like your manual text editor saving it.
+                    [System.IO.File]::WriteAllText($global:scriptPath, $remoteCode, [System.Text.Encoding]::UTF8)
                     
-                    # 4. Detached Ghost Launcher: This completely detaches from the dying PowerShell tree
                     $vbsPath = Join-Path $global:baseDir "Launch Multiplexer.vbs"
-                    $cmdStr = "ping 127.0.0.1 -n 2 > nul & wscript.exe `"$vbsPath`""
-                    Start-Process "cmd.exe" -ArgumentList "/c $cmdStr" -WorkingDirectory $global:baseDir -WindowStyle Hidden
-                    
-                    # 5. Clean exit
+                    Start-Process "wscript.exe" -ArgumentList "`"$vbsPath`"" -WorkingDirectory $global:baseDir
+                    Start-Sleep -Milliseconds 500
                     [Environment]::Exit(0)
                 }
             } else { [System.Windows.Forms.MessageBox]::Show("You are already on the latest version!`n(Local: $global:currentVersion, Remote: $remoteVer)", "Up to Date", 0, 64) }
