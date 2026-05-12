@@ -1,4 +1,4 @@
-Add-Type -AssemblyName System.Windows.Forms
+﻿Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
 # --- LOCK SCOPE FOR EVENT HANDLERS ---
@@ -19,7 +19,7 @@ if (-not ("Win32.WinInet" -as [type])) {
 }
 
 # --- VERSION CONTROL ---
-$global:currentVersion = "4.1.5" 
+$global:currentVersion = "4.2" 
 $repoRawUrl = "https://raw.githubusercontent.com/RichTiTAN/Tor-Multiplexer/main/multiplexer.ps1"
 
 # --- GLOBAL BOOT FLAG & STATE ---
@@ -74,6 +74,11 @@ $classyFont = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.Fon
 $smallFont  = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Regular)
 $colorBg = [System.Drawing.ColorTranslator]::FromHtml("#1A1A1B"); $colorBtn = [System.Drawing.ColorTranslator]::FromHtml("#3A3F44"); $colorText = [System.Drawing.ColorTranslator]::FromHtml("#E2E8F0"); $colorIP = [System.Drawing.ColorTranslator]::FromHtml("#A0AEC0") 
 
+# Desaturated Custom Toggle Palette
+$colorTogOn  = [System.Drawing.ColorTranslator]::FromHtml("#4E7A5E") 
+$colorTogOff = [System.Drawing.ColorTranslator]::FromHtml("#8B4A4A")
+$colorTogLbl = [System.Drawing.ColorTranslator]::FromHtml("#2D3748")
+
 # --- SAFE RELATIVE BRIDGE DATABASE ---
 $bridgeData = @{
     "meek_lite" = @{ "plugin" = "ClientTransportPlugin meek_lite,obfs2,obfs3,obfs4,scramblesuit,webtunnel exec ..\..\PluggableTransports\lyrebird.exe"; "lines" = @("Bridge meek_lite 192.0.2.20:80 url=https://1603026938.rsc.cdn77.org front=www.phpmyadmin.net utls=HelloRandomizedALPN") }
@@ -91,12 +96,45 @@ function Set-RoundedCorners($control, $radius) {
     $control.Region = New-Object System.Drawing.Region($path)
 }
 
+function Set-ToggleState($btn, $state, $onText="Enabled", $offText="Disabled") {
+    if ($state) { $btn.Text = $onText; $btn.BackColor = $colorTogOn }
+    else { $btn.Text = $offText; $btn.BackColor = $colorTogOff }
+}
+
+function Save-Config {
+    $selConfig = if ($comboConfig.SelectedItem.ToString() -match "Stable") { "Stable" } else { "Fast" }
+    $selCount = [int]($comboCount.SelectedItem.ToString().Replace(" (default)", ""))
+    @{ AutoStart = [bool]$autoStart; LaunchOnBoot = [bool]$launchOnBoot; LastConfig = $selConfig; SelectedBridge = $comboBridge.SelectedItem; InstanceCount = $selCount; XrayMode = $global:lastXrayMode; ManualSplit = $txtSplit.Text; CustomBridgeLine = $global:customBridgeLine; EnableV2rayChain = $global:enableV2rayChain; V2rayChainJson = $global:v2rayChainJson } | ConvertTo-Json -Depth 10 | Set-Content $cfgFile
+}
+
+function Update-BootShortcut {
+    $startupFolder = [Environment]::GetFolderPath('Startup')
+    $shortcutPath = Join-Path $startupFolder "TorMultiplexer.lnk"
+    if ($launchOnBoot) {
+        try { 
+            $WshShell = New-Object -ComObject WScript.Shell
+            $Shortcut = $WshShell.CreateShortcut($shortcutPath)
+            $Shortcut.TargetPath = Join-Path $global:baseDir "Launch Multiplexer.vbs"
+            $Shortcut.WorkingDirectory = $global:baseDir
+            $Shortcut.Save() 
+        } catch { 
+            [System.Windows.Forms.MessageBox]::Show("Failed to create Startup shortcut.", "Error", 0, 16)
+            $script:launchOnBoot = $false; Set-ToggleState $btnBootTog $false
+        }
+    } else { if (Test-Path $shortcutPath) { Remove-Item $shortcutPath -Force -ErrorAction SilentlyContinue } }
+}
+
 # --- SETUP THE WINDOW ---
 $form = New-Object Windows.Forms.Form
 $form.Text = "Tor Multiplexer - v$global:currentVersion"
 $form.ClientSize = New-Object Drawing.Size(600, 234)
 $form.StartPosition = "CenterScreen"
 $form.BackColor = $colorBg
+
+# Clean and Instant Form Kill Switch (Bypasses UI Redraw)
+$form.Add_FormClosing({ Stop-AllEngines $true })
+$form.Add_FormClosed({ [Environment]::Exit(0) })
+
 
 # --- MODAL DIALOGS ---
 function Show-CustomBridgeDialog {
@@ -149,21 +187,32 @@ $comboBridge.Add_SelectedIndexChanged({
     if ($comboBridge.SelectedItem -eq "Custom") {
         if (-not (Show-CustomBridgeDialog)) { $comboBridge.SelectedItem = $global:previousBridge } else { $global:previousBridge = "Custom" }
     } else { $global:previousBridge = $comboBridge.SelectedItem }
+    Save-Config
 })
 
 $lblConfig = New-Object Windows.Forms.Label; $lblConfig.Location = "210, 15"; $lblConfig.Size = "170, 20"; $lblConfig.Text = "Routing Config:"; $lblConfig.ForeColor = "#A0AEC0"; $lblConfig.Font = $smallFont
 $comboConfig = New-Object Windows.Forms.ComboBox; $comboConfig.Location = "210, 35"; $comboConfig.Size = "170, 25"; $comboConfig.DropDownStyle = "DropDownList"; $comboConfig.FlatStyle = "Flat"; $comboConfig.BackColor = "#2D3748"; $comboConfig.ForeColor = "#E2E8F0"; $comboConfig.Font = $smallFont; $comboConfig.DrawMode = "OwnerDrawFixed"; $comboConfig.ItemHeight = 20
 $null = $comboConfig.Items.AddRange(@("Stable (default)", "Fast")); $comboConfig.SelectedItem = $lastConfig
+$comboConfig.Add_SelectedIndexChanged({ Save-Config })
 
 $lblCount = New-Object Windows.Forms.Label; $lblCount.Location = "400, 15"; $lblCount.Size = "170, 20"; $lblCount.Text = "Tor Engines (1-8):"; $lblCount.ForeColor = "#A0AEC0"; $lblCount.Font = $smallFont
 $comboCount = New-Object Windows.Forms.ComboBox; $comboCount.Location = "400, 35"; $comboCount.Size = "170, 25"; $comboCount.DropDownStyle = "DropDownList"; $comboCount.FlatStyle = "Flat"; $comboCount.BackColor = "#2D3748"; $comboCount.ForeColor = "#E2E8F0"; $comboCount.Font = $smallFont; $comboCount.DrawMode = "OwnerDrawFixed"; $comboCount.ItemHeight = 20
 $null = $comboCount.Items.AddRange(@("1","2","3","4","5","6 (default)","7","8")); $comboCount.SelectedItem = $lastCount
+$comboCount.Add_SelectedIndexChanged({ Save-Config })
 
-# Toggles positioned cleanly on the left
-$chkAutoStart = New-Object Windows.Forms.CheckBox; $chkAutoStart.Location = "20, 80"; $chkAutoStart.Size = "250, 20"; $chkAutoStart.Text = "Auto-connect after launch"; $chkAutoStart.ForeColor = "#F6AD55"; $chkAutoStart.Font = $smallFont; $chkAutoStart.Checked = $autoStart; $chkAutoStart.FlatStyle = "Flat" 
-$chkShowAdvanced = New-Object Windows.Forms.CheckBox; $chkShowAdvanced.Location = "20, 105"; $chkShowAdvanced.Size = "250, 20"; $chkShowAdvanced.Text = "Show Advanced Options"; $chkShowAdvanced.ForeColor = "#A0AEC0"; $chkShowAdvanced.Font = $smallFont; $chkShowAdvanced.FlatStyle = "Flat" 
 
-# Right-side Action & Proxy Buttons
+# --- UI LAYOUT: CUSTOM TOGGLES (SLIMMER TOP LEFT) ---
+$btnAutoStartLbl = New-Object Windows.Forms.Button; $btnAutoStartLbl.Location = "20, 80"; $btnAutoStartLbl.Size = "130, 25"; $btnAutoStartLbl.Text = "Auto-connect"; $btnAutoStartLbl.BackColor = $colorTogLbl; $btnAutoStartLbl.ForeColor = $colorText; $btnAutoStartLbl.FlatStyle = "Flat"; $btnAutoStartLbl.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnAutoStartLbl 5; $btnAutoStartLbl.Font = $smallFont
+$btnAutoStartTog = New-Object Windows.Forms.Button; $btnAutoStartTog.Location = "155, 80"; $btnAutoStartTog.Size = "70, 25"; $btnAutoStartTog.FlatStyle = "Flat"; $btnAutoStartTog.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnAutoStartTog 5; $btnAutoStartTog.Font = $smallFont; $btnAutoStartTog.ForeColor = $colorText; $btnAutoStartTog.Cursor = "Hand"
+Set-ToggleState $btnAutoStartTog $autoStart
+
+$btnAdvLbl = New-Object Windows.Forms.Button; $btnAdvLbl.Location = "20, 110"; $btnAdvLbl.Size = "130, 25"; $btnAdvLbl.Text = "Advanced Settings"; $btnAdvLbl.BackColor = $colorTogLbl; $btnAdvLbl.ForeColor = $colorText; $btnAdvLbl.FlatStyle = "Flat"; $btnAdvLbl.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnAdvLbl 5; $btnAdvLbl.Font = $smallFont
+$btnAdvTog = New-Object Windows.Forms.Button; $btnAdvTog.Location = "155, 110"; $btnAdvTog.Size = "70, 25"; $btnAdvTog.FlatStyle = "Flat"; $btnAdvTog.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnAdvTog 5; $btnAdvTog.Font = $smallFont; $btnAdvTog.ForeColor = $colorText; $btnAdvTog.Cursor = "Hand"
+$showAdvanced = $false
+Set-ToggleState $btnAdvTog $showAdvanced "Show" "Hide"
+
+
+# --- UI LAYOUT: RIGHT-SIDE ACTIONS ---
 $btnProxyMode = New-Object Windows.Forms.Button; $btnProxyMode.Location = "270, 75"; $btnProxyMode.Size = "148, 30"; $btnProxyMode.FlatStyle = "Flat"; $btnProxyMode.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnProxyMode 8; $btnProxyMode.Text = "Proxy Mode"; $btnProxyMode.Font = $smallFont; $btnProxyMode.Cursor = "Hand"
 $btnClearProxy = New-Object Windows.Forms.Button; $btnClearProxy.Location = "422, 75"; $btnClearProxy.Size = "148, 30"; $btnClearProxy.FlatStyle = "Flat"; $btnClearProxy.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnClearProxy 8; $btnClearProxy.Text = "Clear Proxy"; $btnClearProxy.Font = $smallFont; $btnClearProxy.Cursor = "Hand"
 
@@ -173,7 +222,6 @@ function Update-RoutingToggle {
 }
 Update-RoutingToggle 
 
-# Connect Button precisely 4 pixels below the proxy mode buttons
 $btnAction = New-Object Windows.Forms.Button; $btnAction.Location = "270, 109"; $btnAction.Size = "300, 60"; $btnAction.BackColor = $colorBtn; $btnAction.ForeColor = $colorText; $btnAction.FlatStyle = "Flat"; $btnAction.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnAction 15; $btnAction.Text = ""; $btnAction.Cursor = [System.Windows.Forms.Cursors]::Hand
 
 $btnAction.Add_Paint({
@@ -192,31 +240,92 @@ $btnAction.Add_Paint({
 $btnAction.Add_Click({ if ($global:isConnected -or $global:btnMainText -eq "CONNECTING...") { Stop-AllEngines } else { Start-Engines } })
 
 
-# --- UI LAYOUT: ADVANCED OPTIONS (GRID ALIGNED, EXACTLY 30px HEIGHT) ---
+# --- UI LAYOUT: ADVANCED OPTIONS ---
 $lblSplit = New-Object Windows.Forms.Label; $lblSplit.Text = "Direct Websites/IPs (comma separated):"; $lblSplit.Location = "20, 184"; $lblSplit.Size = "260, 20"; $lblSplit.ForeColor = "#A0AEC0"; $lblSplit.Font = $smallFont; $lblSplit.Visible = $false
-$chkV2rayChain = New-Object Windows.Forms.CheckBox; $chkV2rayChain.Text = "Chain a custom V2Ray config"; $chkV2rayChain.Location = "300, 184"; $chkV2rayChain.Size = "200, 20"; $chkV2rayChain.ForeColor = "#A0AEC0"; $chkV2rayChain.Font = $smallFont; $chkV2rayChain.FlatStyle = "Flat"; $chkV2rayChain.Visible = $false; $chkV2rayChain.Checked = $global:enableV2rayChain
-
 $txtSplit = New-Object Windows.Forms.TextBox; $txtSplit.Location = "20, 204"; $txtSplit.Size = "260, 30"; $txtSplit.BackColor = "#2D3748"; $txtSplit.ForeColor = "White"; $txtSplit.BorderStyle = "None"; $txtSplit.Multiline = $true; Set-RoundedCorners $txtSplit 5; $txtSplit.Visible = $false; $txtSplit.Text = $lastManualSplit
-$btnSetupV2ray = New-Object Windows.Forms.Button; $btnSetupV2ray.Text = "Configure Node"; $btnSetupV2ray.Location = "300, 204"; $btnSetupV2ray.Size="270, 30"; $btnSetupV2ray.BackColor = $colorBtn; $btnSetupV2ray.ForeColor = $colorText; $btnSetupV2ray.FlatStyle = "Flat"; $btnSetupV2ray.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnSetupV2ray 5; $btnSetupV2ray.Visible = $false
+
+$lblV2rayChain = New-Object Windows.Forms.Label; $lblV2rayChain.Text = "Chain a custom V2Ray config:"; $lblV2rayChain.Location = "300, 184"; $lblV2rayChain.Size = "200, 20"; $lblV2rayChain.ForeColor = "#A0AEC0"; $lblV2rayChain.Font = $smallFont; $lblV2rayChain.Visible = $false
+$btnV2rayConfig = New-Object Windows.Forms.Button; $btnV2rayConfig.Text = "Configure Node"; $btnV2rayConfig.Location = "300, 204"; $btnV2rayConfig.Size="165, 30"; $btnV2rayConfig.BackColor = $colorBtn; $btnV2rayConfig.ForeColor = $colorText; $btnV2rayConfig.FlatStyle = "Flat"; $btnV2rayConfig.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnV2rayConfig 5; $btnV2rayConfig.Visible = $false; $btnV2rayConfig.Cursor = "Hand"
+$btnV2rayTog = New-Object Windows.Forms.Button; $btnV2rayTog.Location = "470, 204"; $btnV2rayTog.Size="100, 30"; $btnV2rayTog.FlatStyle = "Flat"; $btnV2rayTog.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnV2rayTog 5; $btnV2rayTog.Visible = $false; $btnV2rayTog.Font = $smallFont; $btnV2rayTog.ForeColor = $colorText; $btnV2rayTog.Cursor = "Hand"
+Set-ToggleState $btnV2rayTog $global:enableV2rayChain
 
 $btnDesktop = New-Object Windows.Forms.Button; $btnDesktop.Location = "20, 244"; $btnDesktop.Size = "260, 30"; $btnDesktop.Text = "Create Desktop Shortcut"; $btnDesktop.BackColor = $colorBtn; $btnDesktop.ForeColor = $colorText; $btnDesktop.FlatStyle = "Flat"; $btnDesktop.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnDesktop 5; $btnDesktop.Font = $smallFont; $btnDesktop.Cursor = [System.Windows.Forms.Cursors]::Hand; $btnDesktop.Visible = $false
 $btnUpdate = New-Object Windows.Forms.Button; $btnUpdate.Location = "300, 244"; $btnUpdate.Size = "270, 30"; $btnUpdate.Text = "Check for Updates"; $btnUpdate.BackColor = $colorBtn; $btnUpdate.ForeColor = $colorText; $btnUpdate.FlatStyle = "Flat"; $btnUpdate.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnUpdate 5; $btnUpdate.Font = $smallFont; $btnUpdate.Cursor = [System.Windows.Forms.Cursors]::Hand; $btnUpdate.Visible = $false
 
-$chkLaunchBoot = New-Object Windows.Forms.CheckBox; $chkLaunchBoot.Location = "20, 284"; $chkLaunchBoot.Size = "250, 20"; $chkLaunchBoot.Text = "Launch on Windows Boot"; $chkLaunchBoot.ForeColor = "#A0AEC0"; $chkLaunchBoot.Font = $smallFont; $chkLaunchBoot.Checked = $launchOnBoot; $chkLaunchBoot.FlatStyle = "Flat"; $chkLaunchBoot.Visible = $false
-$chkDebug = New-Object Windows.Forms.CheckBox; $chkDebug.Location = "300, 284"; $chkDebug.Size = "250, 20"; $chkDebug.Text = "Debug Mode"; $chkDebug.ForeColor = "#A0AEC0"; $chkDebug.Font = $smallFont; $chkDebug.FlatStyle = "Flat"; $chkDebug.Visible = $false
+# Bottom Toggle Footers - Matched perfectly to width of buttons above (260px and 270px)
+$btnBootLbl = New-Object Windows.Forms.Button; $btnBootLbl.Location = "20, 284"; $btnBootLbl.Size = "155, 25"; $btnBootLbl.Text = "Launch on Boot"; $btnBootLbl.BackColor = $colorTogLbl; $btnBootLbl.ForeColor = $colorText; $btnBootLbl.FlatStyle = "Flat"; $btnBootLbl.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnBootLbl 5; $btnBootLbl.Font = $smallFont; $btnBootLbl.Visible = $false
+$btnBootTog = New-Object Windows.Forms.Button; $btnBootTog.Location = "180, 284"; $btnBootTog.Size = "100, 25"; $btnBootTog.FlatStyle = "Flat"; $btnBootTog.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnBootTog 5; $btnBootTog.Font = $smallFont; $btnBootTog.ForeColor = $colorText; $btnBootTog.Cursor = "Hand"; $btnBootTog.Visible = $false
+Set-ToggleState $btnBootTog $launchOnBoot
+
+$btnDebugLbl = New-Object Windows.Forms.Button; $btnDebugLbl.Location = "300, 284"; $btnDebugLbl.Size = "165, 25"; $btnDebugLbl.Text = "Debug Mode"; $btnDebugLbl.BackColor = $colorTogLbl; $btnDebugLbl.ForeColor = $colorText; $btnDebugLbl.FlatStyle = "Flat"; $btnDebugLbl.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnDebugLbl 5; $btnDebugLbl.Font = $smallFont; $btnDebugLbl.Visible = $false
+$btnDebugTog = New-Object Windows.Forms.Button; $btnDebugTog.Location = "470, 284"; $btnDebugTog.Size = "100, 25"; $btnDebugTog.FlatStyle = "Flat"; $btnDebugTog.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnDebugTog 5; $btnDebugTog.Font = $smallFont; $btnDebugTog.ForeColor = $colorText; $btnDebugTog.Cursor = "Hand"; $btnDebugTog.Visible = $false
+$debugMode = $false
+Set-ToggleState $btnDebugTog $debugMode
 
 $lblProxy = New-Object Windows.Forms.Label; $lblProxy.Location = "10, 179"; $lblProxy.Size = "580, 40"; $lblProxy.ForeColor = $colorIP; $lblProxy.Font = $smallFont; $lblProxy.Text = "Local Socks: 127.0.0.1:10800`nLan Socks: $lanIp`:10800"; $lblProxy.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft; $lblProxy.Visible = $false
 
+
 # --- DYNAMIC RESIZING EVENT ---
-$chkShowAdvanced.Add_CheckedChanged({ 
-    $show = $chkShowAdvanced.Checked
-    $chkLaunchBoot.Visible = $show; $chkDebug.Visible = $show; $btnDesktop.Visible = $show; $btnUpdate.Visible = $show
-    $lblSplit.Visible = $show; $txtSplit.Visible = $show; $chkV2rayChain.Visible = $show; $btnSetupV2ray.Visible = $show
+function Toggle-AdvancedView {
+    $show = $script:showAdvanced
+    $lblSplit.Visible = $show; $txtSplit.Visible = $show
+    $lblV2rayChain.Visible = $show; $btnV2rayConfig.Visible = $show; $btnV2rayTog.Visible = $show
+    $btnDesktop.Visible = $show; $btnUpdate.Visible = $show
+    $btnBootLbl.Visible = $show; $btnBootTog.Visible = $show
+    $btnDebugLbl.Visible = $show; $btnDebugTog.Visible = $show
+
     if ($show) { $form.ClientSize = New-Object Drawing.Size(600, 354); $lblProxy.Location = "10, 309" } 
     else { $form.ClientSize = New-Object Drawing.Size(600, 234); $lblProxy.Location = "10, 179" }
-})
+}
 
-# --- EVENT BINDINGS ---
+# --- EVENT BINDINGS (CUSTOM TOGGLES) ---
+
+# Auto Connect
+$btnAutoStartTog.Add_Click({
+    $script:autoStart = -not $script:autoStart
+    Set-ToggleState $btnAutoStartTog $script:autoStart
+    Save-Config
+})
+$btnAutoStartLbl.Add_Click({ $btnAutoStartTog.PerformClick() })
+
+# Advanced Options
+$btnAdvTog.Add_Click({
+    $script:showAdvanced = -not $script:showAdvanced
+    Set-ToggleState $btnAdvTog $script:showAdvanced "Show" "Hide"
+    Toggle-AdvancedView
+})
+$btnAdvLbl.Add_Click({ $btnAdvTog.PerformClick() })
+
+# Launch on Boot
+$btnBootTog.Add_Click({
+    $script:launchOnBoot = -not $script:launchOnBoot
+    Set-ToggleState $btnBootTog $script:launchOnBoot
+    Update-BootShortcut
+    Save-Config
+})
+$btnBootLbl.Add_Click({ $btnBootTog.PerformClick() })
+
+# Debug Mode
+$btnDebugTog.Add_Click({
+    $script:debugMode = -not $script:debugMode
+    Set-ToggleState $btnDebugTog $script:debugMode
+})
+$btnDebugLbl.Add_Click({ $btnDebugTog.PerformClick() })
+
+# Chain V2Ray Config
+$btnV2rayTog.Add_Click({
+    $newState = -not $global:enableV2rayChain
+    if ($newState -and [string]::IsNullOrWhiteSpace($global:v2rayChainJson)) {
+        if (-not (Show-V2rayDialog)) { $newState = $false }
+    }
+    $global:enableV2rayChain = $newState
+    Set-ToggleState $btnV2rayTog $global:enableV2rayChain
+    Save-Config
+})
+$btnV2rayConfig.Add_Click({ Show-V2rayDialog })
+
+
+# --- EVENT BINDINGS (BUTTONS & ACTIONS) ---
 $btnDesktop.Add_Click({
     $deskFolder = [Environment]::GetFolderPath('Desktop')
     $shortcutPath = Join-Path $deskFolder "TorMultiplexer.lnk"
@@ -242,17 +351,13 @@ function Update-Application {
             $remoteVer = $matches[1]
             if ([version]$remoteVer -gt [version]$global:currentVersion) {
                 if ([System.Windows.Forms.MessageBox]::Show("Version $remoteVer is available! Update now?", "Update Found", 4, 64) -eq "Yes") {
-                    Stop-AllEngines
-                    
-                    # Direct memory overwrite
+                    Stop-AllEngines $true
                     $remoteCode | Set-Content -Path $global:scriptPath -Encoding UTF8 -Force
-                    
-                    [System.Windows.Forms.MessageBox]::Show("Update successful! Please restart the application.", "Success", 0, 64)
+                    $vbsPath = Join-Path $global:baseDir "Launch Multiplexer.vbs"
+                    Start-Process "wscript.exe" -ArgumentList "`"$vbsPath`""
                     [Environment]::Exit(0)
                 }
-            } else { 
-                [System.Windows.Forms.MessageBox]::Show("You are already on the latest version!`n(Local: $global:currentVersion, Remote: $remoteVer)", "Up to Date", 0, 64) 
-            }
+            } else { [System.Windows.Forms.MessageBox]::Show("You are already on the latest version!`n(Local: $global:currentVersion, Remote: $remoteVer)", "Up to Date", 0, 64) }
         } else {
             [System.Windows.Forms.MessageBox]::Show("Could not read the version number from GitHub.", "Update Error", 0, 16)
         }
@@ -262,14 +367,6 @@ function Update-Application {
     $btnUpdate.Text = "Check for Updates"
 }
 $btnUpdate.Add_Click({ Update-Application })
-
-$chkV2rayChain.Add_CheckedChanged({
-    if ($chkV2rayChain.Checked -and [string]::IsNullOrWhiteSpace($global:v2rayChainJson)) {
-        if (-not (Show-V2rayDialog)) { $chkV2rayChain.Checked = $false }
-    }
-    $global:enableV2rayChain = $chkV2rayChain.Checked
-})
-$btnSetupV2ray.Add_Click({ Show-V2rayDialog })
 
 $paintCombo = {
     param($sender, $e); if ($e.Index -lt 0) { return }; $g = $e.Graphics; $rect = $e.Bounds; $text = $sender.Items[$e.Index].ToString()
@@ -282,22 +379,11 @@ $comboBridge.Add_DrawItem($paintCombo); $comboConfig.Add_DrawItem($paintCombo); 
 $toggleAction = {
     param($mode); if ($global:lastXrayMode -ne $mode) {
         $global:lastXrayMode = $mode; Update-RoutingToggle
-        $selConfig = if ($comboConfig.SelectedItem.ToString() -match "Stable") { "Stable" } else { "Fast" }; $selCount = [int]($comboCount.SelectedItem.ToString().Replace(" (default)", ""))
-        @{ AutoStart = [bool]$chkAutoStart.Checked; LaunchOnBoot = [bool]$chkLaunchBoot.Checked; LastConfig = $selConfig; SelectedBridge = $comboBridge.SelectedItem; InstanceCount = $selCount; XrayMode = $mode; ManualSplit = $txtSplit.Text; CustomBridgeLine = $global:customBridgeLine; EnableV2rayChain = $global:enableV2rayChain; V2rayChainJson = $global:v2rayChainJson } | ConvertTo-Json -Depth 10 | Set-Content $cfgFile
+        Save-Config
         if ($global:isConnected) { Restart-Xray $mode }
     }
 }
 $btnProxyMode.Add_Click({ &$toggleAction "Proxy Mode" }); $btnClearProxy.Add_Click({ &$toggleAction "Clear Proxy" })
-
-$chkLaunchBoot.Add_CheckedChanged({
-    $startupFolder = [Environment]::GetFolderPath('Startup'); $shortcutPath = Join-Path $startupFolder "TorMultiplexer.lnk"
-    if ($chkLaunchBoot.Checked) {
-        try { $WshShell = New-Object -ComObject WScript.Shell; $Shortcut = $WshShell.CreateShortcut($shortcutPath); $Shortcut.TargetPath = Join-Path $global:baseDir "Launch Multiplexer.vbs"; $Shortcut.WorkingDirectory = $global:baseDir; $Shortcut.Save() } 
-        catch { [System.Windows.Forms.MessageBox]::Show("Failed to create Startup shortcut.", "Error", 0, 16); $chkLaunchBoot.Checked = $false }
-    } else { if (Test-Path $shortcutPath) { Remove-Item $shortcutPath -Force -ErrorAction SilentlyContinue } }
-    $selConfig = if ($comboConfig.SelectedItem.ToString() -match "Stable") { "Stable" } else { "Fast" }; $selCount = [int]($comboCount.SelectedItem.ToString().Replace(" (default)", ""))
-    @{ AutoStart = [bool]$chkAutoStart.Checked; LaunchOnBoot = [bool]$chkLaunchBoot.Checked; LastConfig = $selConfig; SelectedBridge = $comboBridge.SelectedItem; InstanceCount = $selCount; XrayMode = $global:lastXrayMode; ManualSplit = $txtSplit.Text; CustomBridgeLine = $global:customBridgeLine; EnableV2rayChain = $global:enableV2rayChain; V2rayChainJson = $global:v2rayChainJson } | ConvertTo-Json -Depth 10 | Set-Content $cfgFile
-})
 
 # --- CORE FUNCTIONS ---
 function Write-XrayConfig($manualList) {
@@ -355,7 +441,6 @@ function Set-SystemProxy($enable) {
     if ($enable) { Set-ItemProperty $path -Name "ProxyEnable" -Value 1; Set-ItemProperty $path -Name "ProxyServer" -Value "127.0.0.1:10818" } 
     else { Set-ItemProperty $path -Name "ProxyEnable" -Value 0 }
     
-    # --- BUG FIX: WinInet type declaration ---
     [Win32.WinInet]::InternetSetOption([IntPtr]::Zero, 39, [IntPtr]::Zero, 0) | Out-Null
     [Win32.WinInet]::InternetSetOption([IntPtr]::Zero, 37, [IntPtr]::Zero, 0) | Out-Null
 }
@@ -365,15 +450,15 @@ function Restart-Xray($targetMode) {
     if ($null -ne $global:cmdDebugPid) { Stop-Process -Id $global:cmdDebugPid -Force -ErrorAction SilentlyContinue; $global:cmdDebugPid = $null }
     Start-Sleep -Milliseconds 500
     Write-XrayConfig $txtSplit.Text
-    if ($chkDebug.Checked) { $p = Start-Process "cmd.exe" -ArgumentList "/c `"title XrayDebug & .\xray.exe run -c config.json || pause`"" -WorkingDirectory $xrayDir -WindowStyle Normal -PassThru; $global:cmdDebugPid = $p.Id } 
+    if ($script:debugMode) { $p = Start-Process "cmd.exe" -ArgumentList "/c `"title XrayDebug & .\xray.exe run -c config.json || pause`"" -WorkingDirectory $xrayDir -WindowStyle Normal -PassThru; $global:cmdDebugPid = $p.Id } 
     else { Start-Process -FilePath "$xrayDir\xray.exe" -ArgumentList "run -c config.json" -WorkingDirectory $xrayDir -WindowStyle Hidden }
     if ($targetMode -eq "Proxy Mode") { Set-SystemProxy $true } else { Set-SystemProxy $false }
 }
 
 $txtSplit.Add_KeyDown({ param($sender, $e)
     if ($e.KeyCode -eq 'Enter') {
-        $e.SuppressKeyPress = $true; $selConfig = if ($comboConfig.SelectedItem.ToString() -match "Stable") { "Stable" } else { "Fast" }; $selCount = [int]($comboCount.SelectedItem.ToString().Replace(" (default)", ""))
-        @{ AutoStart = [bool]$chkAutoStart.Checked; LaunchOnBoot = [bool]$chkLaunchBoot.Checked; LastConfig = $selConfig; SelectedBridge = $comboBridge.SelectedItem; InstanceCount = $selCount; XrayMode = $global:lastXrayMode; ManualSplit = $txtSplit.Text; CustomBridgeLine = $global:customBridgeLine; EnableV2rayChain = $global:enableV2rayChain; V2rayChainJson = $global:v2rayChainJson } | ConvertTo-Json -Depth 10 | Set-Content $cfgFile
+        $e.SuppressKeyPress = $true
+        Save-Config
         if ($global:isConnected) { Restart-Xray $global:lastXrayMode }
     }
 })
@@ -389,11 +474,18 @@ function Reset-ButtonText {
     $btnAction.Refresh() 
 }
 
-function Stop-AllEngines {
+function Stop-AllEngines($isClosing = $false) {
     $global:abortBoot = $true; Set-SystemProxy $false
     Get-Process tor, haproxy, xray -ErrorAction SilentlyContinue | ForEach-Object { try { $p = $_.Path; if ($null -ne $p -and ($p -eq "$xrayDir\xray.exe" -or $p -eq "$haPath\haproxy.exe" -or $p -match "Data\\Tors\\Tor")) { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue } } catch {} }
     if ($null -ne $global:cmdDebugPid) { Stop-Process -Id $global:cmdDebugPid -Force -ErrorAction SilentlyContinue; $global:cmdDebugPid = $null }
-    $global:isConnected = $false; Reset-ButtonText; $btnAction.Enabled = $true; $lblProxy.Visible = $false
+    $global:isConnected = $false
+    
+    # Bypassing UI updates during application closure prevents freezing
+    if (-not $isClosing) {
+        Reset-ButtonText
+        $btnAction.Enabled = $true
+        $lblProxy.Visible = $false
+    }
 }
 
 function Wait-NonBlocking($s) { $end = (Get-Date).AddSeconds($s); while((Get-Date) -lt $end) { if($global:abortBoot){return}; [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -ms 100 } }
@@ -417,9 +509,8 @@ function Start-Engines {
     $selConfig = if ($comboConfig.SelectedItem.ToString() -match "Stable") { "Stable" } else { "Fast" }; $selCount = [int]($comboCount.SelectedItem.ToString().Replace(" (default)", ""))
     $mode = $global:lastXrayMode; $cfgFileTarget = if ($selConfig -eq "Stable") { "torrc" } else { "torrc2" }
 
-    @{ AutoStart = [bool]$chkAutoStart.Checked; LaunchOnBoot = [bool]$chkLaunchBoot.Checked; LastConfig = $selConfig; SelectedBridge = $selBridge; InstanceCount = $selCount; XrayMode = $mode; ManualSplit = $txtSplit.Text; CustomBridgeLine = $global:customBridgeLine; EnableV2rayChain = $global:enableV2rayChain; V2rayChainJson = $global:v2rayChainJson } | ConvertTo-Json -Depth 10 | Set-Content $cfgFile
-    
-    $winStyle = if ($chkDebug.Checked) { "Normal" } else { "Hidden" }; $global:btnMainText = "CONNECTING..."; Format-HAProxyConfig $selCount; $dynamicWait = 16 - $selCount
+    Save-Config
+    $winStyle = if ($script:debugMode) { "Normal" } else { "Hidden" }; $global:btnMainText = "CONNECTING..."; Format-HAProxyConfig $selCount; $dynamicWait = 16 - $selCount
     
     for ($i=1; $i -le $selCount; $i++) {
         if ($global:abortBoot) { break } 
@@ -481,6 +572,6 @@ function Start-Engines {
     $btnAction.Refresh()
 }
 
-$form.Add_Shown({ if ($chkAutoStart.Checked -and -not $isFirstLaunch) { Wait-NonBlocking 1; if (-not $global:abortBoot) { Start-Engines } } })
-$form.Controls.AddRange(@($lblBridge, $comboBridge, $lblConfig, $comboConfig, $lblCount, $comboCount, $btnProxyMode, $btnClearProxy, $btnAction, $chkShowAdvanced, $chkLaunchBoot, $chkDebug, $lblSplit, $txtSplit, $chkV2rayChain, $btnSetupV2ray, $btnDesktop, $btnUpdate, $chkAutoStart, $lblProxy))
+$form.Add_Shown({ if ($autoStart -and -not $isFirstLaunch) { Wait-NonBlocking 1; if (-not $global:abortBoot) { Start-Engines } } })
+$form.Controls.AddRange(@($lblBridge, $comboBridge, $lblConfig, $comboConfig, $lblCount, $comboCount, $btnProxyMode, $btnClearProxy, $btnAction, $btnAutoStartLbl, $btnAutoStartTog, $btnAdvLbl, $btnAdvTog, $lblSplit, $txtSplit, $lblV2rayChain, $btnV2rayConfig, $btnV2rayTog, $btnDesktop, $btnUpdate, $btnBootLbl, $btnBootTog, $btnDebugLbl, $btnDebugTog, $lblProxy))
 $form.ShowDialog()
