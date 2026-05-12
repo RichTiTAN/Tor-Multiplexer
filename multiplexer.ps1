@@ -358,12 +358,13 @@ function Update-Application {
                     # 2. Detach the FormClosing event so it doesn't double-fire when we force exit
                     $form.FormClosing.Clear()
                     
-                    # 3. Direct raw file download (bypassing encoding issues)
-                    Invoke-WebRequest -Uri $repoRawUrl -OutFile $global:scriptPath
+                    # 3. Direct memory overwrite
+                    $remoteCode | Set-Content -Path $global:scriptPath -Encoding UTF8 -Force
                     
-                    # 4. Run native Windows start command exactly as v4.1.5 did
+                    # 4. Detached Ghost Launcher: This completely detaches from the dying PowerShell tree
                     $vbsPath = Join-Path $global:baseDir "Launch Multiplexer.vbs"
-                    Start-Process "wscript.exe" -ArgumentList "`"$vbsPath`""
+                    $cmdStr = "ping 127.0.0.1 -n 2 > nul & wscript.exe `"$vbsPath`""
+                    Start-Process "cmd.exe" -ArgumentList "/c $cmdStr" -WorkingDirectory $global:baseDir -WindowStyle Hidden
                     
                     # 5. Clean exit
                     [Environment]::Exit(0)
