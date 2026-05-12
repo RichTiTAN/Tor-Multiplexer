@@ -352,16 +352,10 @@ function Update-Application {
             if ([version]$remoteVer -gt [version]$global:currentVersion) {
                 if ([System.Windows.Forms.MessageBox]::Show("Version $remoteVer is available! Update now?", "Update Found", 4, 64) -eq "Yes") {
                     
-                    Stop-AllEngines $true
-                    $form.FormClosing.Clear()
+                    # Direct raw file download (bypassing encoding issues)
+                    Invoke-WebRequest -Uri $repoRawUrl -OutFile $global:scriptPath
                     
-                    # 100% bomb-proof .NET UTF-8 save, exactly like your manual text editor saving it.
-                    [System.IO.File]::WriteAllText($global:scriptPath, $remoteCode, [System.Text.Encoding]::UTF8)
-                    
-                    $vbsPath = Join-Path $global:baseDir "Launch Multiplexer.vbs"
-                    Start-Process "wscript.exe" -ArgumentList "`"$vbsPath`"" -WorkingDirectory $global:baseDir
-                    Start-Sleep -Milliseconds 500
-                    [Environment]::Exit(0)
+                    [System.Windows.Forms.MessageBox]::Show("Update downloaded successfully! Please close and restart the application manually to apply the changes.", "Update Complete", 0, 64)
                 }
             } else { [System.Windows.Forms.MessageBox]::Show("You are already on the latest version!`n(Local: $global:currentVersion, Remote: $remoteVer)", "Up to Date", 0, 64) }
         } else {
