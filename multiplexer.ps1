@@ -19,7 +19,7 @@ if (-not ("Win32.WinInet" -as [type])) {
 }
 
 # --- VERSION CONTROL ---
-$global:currentVersion = "4.1.2" 
+$global:currentVersion = "4.1.3" 
 $repoRawUrl = "https://raw.githubusercontent.com/RichTiTAN/Tor-Multiplexer/main/multiplexer.ps1"
 
 # --- GLOBAL BOOT FLAG & STATE ---
@@ -238,18 +238,23 @@ function Update-Application {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $remoteCode = Invoke-RestMethod -Uri $repoRawUrl -UseBasicParsing
         if ($remoteCode -match '`$global:currentVersion\s*=\s*"([^"]+)"') {
             if ([version]$matches[1] -gt [version]$global:currentVersion) {
-                if ([System.Windows.Forms.MessageBox]::Show("Version $($matches[1]) is available! Update?", "Update", 4, 64) -eq "Yes") {
-                    Stop-AllEngines; $remoteCode | Set-Content "$global:baseDir\multiplexer_update.ps1"
+                if ([System.Windows.Forms.MessageBox]::Show("Version $($matches[1]) is available! Update now?", "Update", 4, 64) -eq "Yes") {
+                    Stop-AllEngines
                     
-                    # Safe bat creation utilizing global pathing logic
-                    $batContent = "@echo off`ntimeout /t 2 > nul`nmove /y `"$global:baseDir\multiplexer_update.ps1`" `"$global:scriptPath`"`nstart wscript.exe `"$global:baseDir\Launch Multiplexer.vbs`"`ndel `"%~f0`""
-                    $batContent | Set-Content "$global:baseDir\update.bat"
+                    # Direct memory overwrite (No locked file error, no .bat files)
+                    $remoteCode | Set-Content -Path $global:scriptPath -Encoding UTF8 -Force
                     
-                    Start-Process "$global:baseDir\update.bat" -WindowStyle Hidden; [Environment]::Exit(0)
+                    # Relaunch the app smoothly
+                    $vbsPath = Join-Path $global:baseDir "Launch Multiplexer.vbs"
+                    Start-Process "wscript.exe" -ArgumentList "`"$vbsPath`""
+                    
+                    [Environment]::Exit(0)
                 }
             } else { [System.Windows.Forms.MessageBox]::Show("You are already on the latest version!", "Up to Date") }
         }
-    } catch {}
+    } catch {
+        [System.Windows.Forms.MessageBox]::Show("Update failed: $_", "Error", 0, 16)
+    }
     $btnUpdate.Text = "Check for Updates"
 }
 $btnUpdate.Add_Click({ Update-Application })
