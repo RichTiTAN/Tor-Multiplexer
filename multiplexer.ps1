@@ -351,11 +351,21 @@ function Update-Application {
             $remoteVer = $matches[1]
             if ([version]$remoteVer -gt [version]$global:currentVersion) {
                 if ([System.Windows.Forms.MessageBox]::Show("Version $remoteVer is available! Update now?", "Update Found", 4, 64) -eq "Yes") {
+                    
+                    # 1. Safely stop all engines without triggering a UI redraw loop
                     Stop-AllEngines $true
-                    $remoteCode | Set-Content -Path $global:scriptPath -Encoding UTF8 -Force
+                    
+                    # 2. Detach the FormClosing event so it doesn't double-fire when we force exit
+                    $form.FormClosing.Clear()
+                    
+                    # 3. Direct raw file download (bypassing encoding issues)
+                    Invoke-WebRequest -Uri $repoRawUrl -OutFile $global:scriptPath
+                    
+                    # 4. Run native Windows start command exactly as v4.1.5 did
                     $vbsPath = Join-Path $global:baseDir "Launch Multiplexer.vbs"
-                    Start-Process -FilePath "wscript.exe" -ArgumentList "`"$vbsPath`"" -WorkingDirectory $global:baseDir
-                    Start-Sleep -Milliseconds 500
+                    Start-Process "wscript.exe" -ArgumentList "`"$vbsPath`""
+                    
+                    # 5. Clean exit
                     [Environment]::Exit(0)
                 }
             } else { [System.Windows.Forms.MessageBox]::Show("You are already on the latest version!`n(Local: $global:currentVersion, Remote: $remoteVer)", "Up to Date", 0, 64) }
