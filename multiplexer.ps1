@@ -5,6 +5,10 @@ Add-Type -AssemblyName System.Drawing
 $global:baseDir = $PSScriptRoot
 if ([string]::IsNullOrEmpty($global:baseDir)) { $global:baseDir = (Get-Location).Path }
 
+$global:scriptPath = $PSCommandPath
+if ([string]::IsNullOrEmpty($global:scriptPath)) { $global:scriptPath = $MyInvocation.MyCommand.Path }
+if ([string]::IsNullOrEmpty($global:scriptPath)) { $global:scriptPath = Join-Path $global:baseDir "multiplexer.ps1" }
+
 # --- SYSTEM PROXY REFRESH API ---
 if (-not ("Win32.WinInet" -as [type])) {
     $MethodDefinition = @'
@@ -15,7 +19,7 @@ if (-not ("Win32.WinInet" -as [type])) {
 }
 
 # --- VERSION CONTROL ---
-$global:currentVersion = "4.1.1" 
+$global:currentVersion = "4.1.2" 
 $repoRawUrl = "https://raw.githubusercontent.com/RichTiTAN/Tor-Multiplexer/main/multiplexer.ps1"
 
 # --- GLOBAL BOOT FLAG & STATE ---
@@ -90,7 +94,7 @@ function Set-RoundedCorners($control, $radius) {
 # --- SETUP THE WINDOW ---
 $form = New-Object Windows.Forms.Form
 $form.Text = "Tor Multiplexer - v$global:currentVersion"
-$form.ClientSize = New-Object Drawing.Size(600, 240)
+$form.ClientSize = New-Object Drawing.Size(600, 234)
 $form.StartPosition = "CenterScreen"
 $form.BackColor = $colorBg
 
@@ -155,9 +159,11 @@ $lblCount = New-Object Windows.Forms.Label; $lblCount.Location = "400, 15"; $lbl
 $comboCount = New-Object Windows.Forms.ComboBox; $comboCount.Location = "400, 35"; $comboCount.Size = "170, 25"; $comboCount.DropDownStyle = "DropDownList"; $comboCount.FlatStyle = "Flat"; $comboCount.BackColor = "#2D3748"; $comboCount.ForeColor = "#E2E8F0"; $comboCount.Font = $smallFont; $comboCount.DrawMode = "OwnerDrawFixed"; $comboCount.ItemHeight = 20
 $null = $comboCount.Items.AddRange(@("1","2","3","4","5","6 (default)","7","8")); $comboCount.SelectedItem = $lastCount
 
+# Toggles positioned cleanly on the left
 $chkAutoStart = New-Object Windows.Forms.CheckBox; $chkAutoStart.Location = "20, 80"; $chkAutoStart.Size = "250, 20"; $chkAutoStart.Text = "Auto-connect after launch"; $chkAutoStart.ForeColor = "#F6AD55"; $chkAutoStart.Font = $smallFont; $chkAutoStart.Checked = $autoStart; $chkAutoStart.FlatStyle = "Flat" 
 $chkShowAdvanced = New-Object Windows.Forms.CheckBox; $chkShowAdvanced.Location = "20, 105"; $chkShowAdvanced.Size = "250, 20"; $chkShowAdvanced.Text = "Show Advanced Options"; $chkShowAdvanced.ForeColor = "#A0AEC0"; $chkShowAdvanced.Font = $smallFont; $chkShowAdvanced.FlatStyle = "Flat" 
 
+# Right-side Action & Proxy Buttons
 $btnProxyMode = New-Object Windows.Forms.Button; $btnProxyMode.Location = "270, 75"; $btnProxyMode.Size = "148, 30"; $btnProxyMode.FlatStyle = "Flat"; $btnProxyMode.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnProxyMode 8; $btnProxyMode.Text = "Proxy Mode"; $btnProxyMode.Font = $smallFont; $btnProxyMode.Cursor = "Hand"
 $btnClearProxy = New-Object Windows.Forms.Button; $btnClearProxy.Location = "422, 75"; $btnClearProxy.Size = "148, 30"; $btnClearProxy.FlatStyle = "Flat"; $btnClearProxy.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnClearProxy 8; $btnClearProxy.Text = "Clear Proxy"; $btnClearProxy.Font = $smallFont; $btnClearProxy.Cursor = "Hand"
 
@@ -167,7 +173,8 @@ function Update-RoutingToggle {
 }
 Update-RoutingToggle 
 
-$btnAction = New-Object Windows.Forms.Button; $btnAction.Location = "270, 115"; $btnAction.Size = "300, 60"; $btnAction.BackColor = $colorBtn; $btnAction.ForeColor = $colorText; $btnAction.FlatStyle = "Flat"; $btnAction.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnAction 15; $btnAction.Text = ""; $btnAction.Cursor = [System.Windows.Forms.Cursors]::Hand
+# Connect Button precisely 4 pixels below the proxy mode buttons
+$btnAction = New-Object Windows.Forms.Button; $btnAction.Location = "270, 109"; $btnAction.Size = "300, 60"; $btnAction.BackColor = $colorBtn; $btnAction.ForeColor = $colorText; $btnAction.FlatStyle = "Flat"; $btnAction.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnAction 15; $btnAction.Text = ""; $btnAction.Cursor = [System.Windows.Forms.Cursors]::Hand
 
 $btnAction.Add_Paint({
     param($sender, $e)
@@ -186,27 +193,27 @@ $btnAction.Add_Click({ if ($global:isConnected -or $global:btnMainText -eq "CONN
 
 
 # --- UI LAYOUT: ADVANCED OPTIONS (GRID ALIGNED, EXACTLY 30px HEIGHT) ---
-$lblSplit = New-Object Windows.Forms.Label; $lblSplit.Text = "Direct Websites/IPs (comma separated):"; $lblSplit.Location = "20, 190"; $lblSplit.Size = "260, 20"; $lblSplit.ForeColor = "#A0AEC0"; $lblSplit.Font = $smallFont; $lblSplit.Visible = $false
-$chkV2rayChain = New-Object Windows.Forms.CheckBox; $chkV2rayChain.Text = "Chain a custom V2Ray config"; $chkV2rayChain.Location = "300, 190"; $chkV2rayChain.Size = "200, 20"; $chkV2rayChain.ForeColor = "#A0AEC0"; $chkV2rayChain.Font = $smallFont; $chkV2rayChain.FlatStyle = "Flat"; $chkV2rayChain.Visible = $false; $chkV2rayChain.Checked = $global:enableV2rayChain
+$lblSplit = New-Object Windows.Forms.Label; $lblSplit.Text = "Direct Websites/IPs (comma separated):"; $lblSplit.Location = "20, 184"; $lblSplit.Size = "260, 20"; $lblSplit.ForeColor = "#A0AEC0"; $lblSplit.Font = $smallFont; $lblSplit.Visible = $false
+$chkV2rayChain = New-Object Windows.Forms.CheckBox; $chkV2rayChain.Text = "Chain a custom V2Ray config"; $chkV2rayChain.Location = "300, 184"; $chkV2rayChain.Size = "200, 20"; $chkV2rayChain.ForeColor = "#A0AEC0"; $chkV2rayChain.Font = $smallFont; $chkV2rayChain.FlatStyle = "Flat"; $chkV2rayChain.Visible = $false; $chkV2rayChain.Checked = $global:enableV2rayChain
 
-$txtSplit = New-Object Windows.Forms.TextBox; $txtSplit.Location = "20, 210"; $txtSplit.Size = "260, 30"; $txtSplit.BackColor = "#2D3748"; $txtSplit.ForeColor = "White"; $txtSplit.BorderStyle = "None"; $txtSplit.Multiline = $true; Set-RoundedCorners $txtSplit 5; $txtSplit.Visible = $false; $txtSplit.Text = $lastManualSplit
-$btnSetupV2ray = New-Object Windows.Forms.Button; $btnSetupV2ray.Text = "Configure Node"; $btnSetupV2ray.Location = "300, 210"; $btnSetupV2ray.Size="270, 30"; $btnSetupV2ray.BackColor = $colorBtn; $btnSetupV2ray.ForeColor = $colorText; $btnSetupV2ray.FlatStyle = "Flat"; $btnSetupV2ray.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnSetupV2ray 5; $btnSetupV2ray.Visible = $false
+$txtSplit = New-Object Windows.Forms.TextBox; $txtSplit.Location = "20, 204"; $txtSplit.Size = "260, 30"; $txtSplit.BackColor = "#2D3748"; $txtSplit.ForeColor = "White"; $txtSplit.BorderStyle = "None"; $txtSplit.Multiline = $true; Set-RoundedCorners $txtSplit 5; $txtSplit.Visible = $false; $txtSplit.Text = $lastManualSplit
+$btnSetupV2ray = New-Object Windows.Forms.Button; $btnSetupV2ray.Text = "Configure Node"; $btnSetupV2ray.Location = "300, 204"; $btnSetupV2ray.Size="270, 30"; $btnSetupV2ray.BackColor = $colorBtn; $btnSetupV2ray.ForeColor = $colorText; $btnSetupV2ray.FlatStyle = "Flat"; $btnSetupV2ray.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnSetupV2ray 5; $btnSetupV2ray.Visible = $false
 
-$btnDesktop = New-Object Windows.Forms.Button; $btnDesktop.Location = "20, 250"; $btnDesktop.Size = "260, 30"; $btnDesktop.Text = "Create Desktop Shortcut"; $btnDesktop.BackColor = $colorBtn; $btnDesktop.ForeColor = $colorText; $btnDesktop.FlatStyle = "Flat"; $btnDesktop.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnDesktop 5; $btnDesktop.Font = $smallFont; $btnDesktop.Cursor = [System.Windows.Forms.Cursors]::Hand; $btnDesktop.Visible = $false
-$btnUpdate = New-Object Windows.Forms.Button; $btnUpdate.Location = "300, 250"; $btnUpdate.Size = "270, 30"; $btnUpdate.Text = "Check for Updates"; $btnUpdate.BackColor = $colorBtn; $btnUpdate.ForeColor = $colorText; $btnUpdate.FlatStyle = "Flat"; $btnUpdate.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnUpdate 5; $btnUpdate.Font = $smallFont; $btnUpdate.Cursor = [System.Windows.Forms.Cursors]::Hand; $btnUpdate.Visible = $false
+$btnDesktop = New-Object Windows.Forms.Button; $btnDesktop.Location = "20, 244"; $btnDesktop.Size = "260, 30"; $btnDesktop.Text = "Create Desktop Shortcut"; $btnDesktop.BackColor = $colorBtn; $btnDesktop.ForeColor = $colorText; $btnDesktop.FlatStyle = "Flat"; $btnDesktop.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnDesktop 5; $btnDesktop.Font = $smallFont; $btnDesktop.Cursor = [System.Windows.Forms.Cursors]::Hand; $btnDesktop.Visible = $false
+$btnUpdate = New-Object Windows.Forms.Button; $btnUpdate.Location = "300, 244"; $btnUpdate.Size = "270, 30"; $btnUpdate.Text = "Check for Updates"; $btnUpdate.BackColor = $colorBtn; $btnUpdate.ForeColor = $colorText; $btnUpdate.FlatStyle = "Flat"; $btnUpdate.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnUpdate 5; $btnUpdate.Font = $smallFont; $btnUpdate.Cursor = [System.Windows.Forms.Cursors]::Hand; $btnUpdate.Visible = $false
 
-$chkLaunchBoot = New-Object Windows.Forms.CheckBox; $chkLaunchBoot.Location = "20, 290"; $chkLaunchBoot.Size = "250, 20"; $chkLaunchBoot.Text = "Launch on Windows Boot"; $chkLaunchBoot.ForeColor = "#A0AEC0"; $chkLaunchBoot.Font = $smallFont; $chkLaunchBoot.Checked = $launchOnBoot; $chkLaunchBoot.FlatStyle = "Flat"; $chkLaunchBoot.Visible = $false
-$chkDebug = New-Object Windows.Forms.CheckBox; $chkDebug.Location = "300, 290"; $chkDebug.Size = "250, 20"; $chkDebug.Text = "Debug Mode"; $chkDebug.ForeColor = "#A0AEC0"; $chkDebug.Font = $smallFont; $chkDebug.FlatStyle = "Flat"; $chkDebug.Visible = $false
+$chkLaunchBoot = New-Object Windows.Forms.CheckBox; $chkLaunchBoot.Location = "20, 284"; $chkLaunchBoot.Size = "250, 20"; $chkLaunchBoot.Text = "Launch on Windows Boot"; $chkLaunchBoot.ForeColor = "#A0AEC0"; $chkLaunchBoot.Font = $smallFont; $chkLaunchBoot.Checked = $launchOnBoot; $chkLaunchBoot.FlatStyle = "Flat"; $chkLaunchBoot.Visible = $false
+$chkDebug = New-Object Windows.Forms.CheckBox; $chkDebug.Location = "300, 284"; $chkDebug.Size = "250, 20"; $chkDebug.Text = "Debug Mode"; $chkDebug.ForeColor = "#A0AEC0"; $chkDebug.Font = $smallFont; $chkDebug.FlatStyle = "Flat"; $chkDebug.Visible = $false
 
-$lblProxy = New-Object Windows.Forms.Label; $lblProxy.Location = "10, 185"; $lblProxy.Size = "580, 40"; $lblProxy.ForeColor = $colorIP; $lblProxy.Font = $smallFont; $lblProxy.Text = "Local Socks: 127.0.0.1:10800`nLan Socks: $lanIp`:10800"; $lblProxy.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft; $lblProxy.Visible = $false
+$lblProxy = New-Object Windows.Forms.Label; $lblProxy.Location = "10, 179"; $lblProxy.Size = "580, 40"; $lblProxy.ForeColor = $colorIP; $lblProxy.Font = $smallFont; $lblProxy.Text = "Local Socks: 127.0.0.1:10800`nLan Socks: $lanIp`:10800"; $lblProxy.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft; $lblProxy.Visible = $false
 
 # --- DYNAMIC RESIZING EVENT ---
 $chkShowAdvanced.Add_CheckedChanged({ 
     $show = $chkShowAdvanced.Checked
     $chkLaunchBoot.Visible = $show; $chkDebug.Visible = $show; $btnDesktop.Visible = $show; $btnUpdate.Visible = $show
     $lblSplit.Visible = $show; $txtSplit.Visible = $show; $chkV2rayChain.Visible = $show; $btnSetupV2ray.Visible = $show
-    if ($show) { $form.ClientSize = New-Object Drawing.Size(600, 360); $lblProxy.Location = "10, 315" } 
-    else { $form.ClientSize = New-Object Drawing.Size(600, 240); $lblProxy.Location = "10, 185" }
+    if ($show) { $form.ClientSize = New-Object Drawing.Size(600, 354); $lblProxy.Location = "10, 309" } 
+    else { $form.ClientSize = New-Object Drawing.Size(600, 234); $lblProxy.Location = "10, 179" }
 })
 
 # --- EVENT BINDINGS ---
@@ -225,6 +232,26 @@ $btnDesktop.Add_Click({
     }
 })
 
+function Update-Application {
+    $btnUpdate.Text = "Checking..."; $btnUpdate.Refresh()
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $remoteCode = Invoke-RestMethod -Uri $repoRawUrl -UseBasicParsing
+        if ($remoteCode -match '`$global:currentVersion\s*=\s*"([^"]+)"') {
+            if ([version]$matches[1] -gt [version]$global:currentVersion) {
+                if ([System.Windows.Forms.MessageBox]::Show("Version $($matches[1]) is available! Update?", "Update", 4, 64) -eq "Yes") {
+                    Stop-AllEngines; $remoteCode | Set-Content "$global:baseDir\multiplexer_update.ps1"
+                    
+                    # Safe bat creation utilizing global pathing logic
+                    $batContent = "@echo off`ntimeout /t 2 > nul`nmove /y `"$global:baseDir\multiplexer_update.ps1`" `"$global:scriptPath`"`nstart wscript.exe `"$global:baseDir\Launch Multiplexer.vbs`"`ndel `"%~f0`""
+                    $batContent | Set-Content "$global:baseDir\update.bat"
+                    
+                    Start-Process "$global:baseDir\update.bat" -WindowStyle Hidden; [Environment]::Exit(0)
+                }
+            } else { [System.Windows.Forms.MessageBox]::Show("You are already on the latest version!", "Up to Date") }
+        }
+    } catch {}
+    $btnUpdate.Text = "Check for Updates"
+}
 $btnUpdate.Add_Click({ Update-Application })
 
 $chkV2rayChain.Add_CheckedChanged({
@@ -338,23 +365,6 @@ $txtSplit.Add_KeyDown({ param($sender, $e)
         if ($global:isConnected) { Restart-Xray $global:lastXrayMode }
     }
 })
-
-function Update-Application {
-    $btnUpdate.Text = "Checking..."; $btnUpdate.Refresh()
-    try {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $remoteCode = Invoke-RestMethod -Uri $repoRawUrl -UseBasicParsing
-        if ($remoteCode -match '`$global:currentVersion\s*=\s*"([^"]+)"') {
-            if ([version]$matches[1] -gt [version]$global:currentVersion) {
-                if ([System.Windows.Forms.MessageBox]::Show("Version $($matches[1]) is available! Update?", "Update", 4, 64) -eq "Yes") {
-                    Stop-AllEngines; $remoteCode | Set-Content "$global:baseDir\multiplexer_update.ps1"
-                    "@echo off`ntimeout /t 2 > nul`nmove /y `"$global:baseDir\multiplexer_update.ps1`" `"$PSCommandPath`"`nstart powershell -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`"`ndel `"%~f0`"" | Set-Content "$global:baseDir\update.bat"
-                    Start-Process "$global:baseDir\update.bat" -WindowStyle Hidden; [Environment]::Exit(0)
-                }
-            } else { [System.Windows.Forms.MessageBox]::Show("You are already on the latest version!", "Up to Date") }
-        }
-    } catch {}
-    $btnUpdate.Text = "Check for Updates"
-}
 
 function Reset-ButtonText { 
     $global:btnMainText = "CONNECT"
