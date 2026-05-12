@@ -5,10 +5,6 @@ Add-Type -AssemblyName System.Drawing
 $global:baseDir = $PSScriptRoot
 if ([string]::IsNullOrEmpty($global:baseDir)) { $global:baseDir = (Get-Location).Path }
 
-$global:scriptPath = $PSCommandPath
-if ([string]::IsNullOrEmpty($global:scriptPath)) { $global:scriptPath = $MyInvocation.MyCommand.Path }
-if ([string]::IsNullOrEmpty($global:scriptPath)) { $global:scriptPath = Join-Path $global:baseDir "multiplexer.ps1" }
-
 # --- SYSTEM PROXY REFRESH API ---
 if (-not ("Win32.WinInet" -as [type])) {
     $MethodDefinition = @'
@@ -19,7 +15,7 @@ if (-not ("Win32.WinInet" -as [type])) {
 }
 
 # --- VERSION CONTROL ---
-$global:currentVersion = "4.1.3" 
+$global:currentVersion = "4.1.4" 
 $repoRawUrl = "https://raw.githubusercontent.com/RichTiTAN/Tor-Multiplexer/main/multiplexer.ps1"
 
 # --- GLOBAL BOOT FLAG & STATE ---
@@ -138,7 +134,6 @@ function Show-V2rayDialog {
     $dlg.Dispose(); return $false
 }
 
-
 # --- UI LAYOUT: BASE ELEMENTS ---
 $lblBridge = New-Object Windows.Forms.Label; $lblBridge.Location = "20, 15"; $lblBridge.Size = "170, 20"; $lblBridge.Text = "Bridge Type:"; $lblBridge.ForeColor = "#A0AEC0"; $lblBridge.Font = $smallFont
 $comboBridge = New-Object Windows.Forms.ComboBox; $comboBridge.Location = "20, 35"; $comboBridge.Size = "170, 25"; $comboBridge.DropDownStyle = "DropDownList"; $comboBridge.FlatStyle = "Flat"; $comboBridge.BackColor = "#2D3748"; $comboBridge.ForeColor = "#E2E8F0"; $comboBridge.Font = $smallFont; $comboBridge.DrawMode = "OwnerDrawFixed"; $comboBridge.ItemHeight = 20
@@ -163,7 +158,7 @@ $null = $comboCount.Items.AddRange(@("1","2","3","4","5","6 (default)","7","8"))
 $chkAutoStart = New-Object Windows.Forms.CheckBox; $chkAutoStart.Location = "20, 80"; $chkAutoStart.Size = "250, 20"; $chkAutoStart.Text = "Auto-connect after launch"; $chkAutoStart.ForeColor = "#F6AD55"; $chkAutoStart.Font = $smallFont; $chkAutoStart.Checked = $autoStart; $chkAutoStart.FlatStyle = "Flat" 
 $chkShowAdvanced = New-Object Windows.Forms.CheckBox; $chkShowAdvanced.Location = "20, 105"; $chkShowAdvanced.Size = "250, 20"; $chkShowAdvanced.Text = "Show Advanced Options"; $chkShowAdvanced.ForeColor = "#A0AEC0"; $chkShowAdvanced.Font = $smallFont; $chkShowAdvanced.FlatStyle = "Flat" 
 
-# Right-side Action & Proxy Buttons
+# Right-side Action & Proxy Buttons (Perfectly Spaced)
 $btnProxyMode = New-Object Windows.Forms.Button; $btnProxyMode.Location = "270, 75"; $btnProxyMode.Size = "148, 30"; $btnProxyMode.FlatStyle = "Flat"; $btnProxyMode.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnProxyMode 8; $btnProxyMode.Text = "Proxy Mode"; $btnProxyMode.Font = $smallFont; $btnProxyMode.Cursor = "Hand"
 $btnClearProxy = New-Object Windows.Forms.Button; $btnClearProxy.Location = "422, 75"; $btnClearProxy.Size = "148, 30"; $btnClearProxy.FlatStyle = "Flat"; $btnClearProxy.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnClearProxy 8; $btnClearProxy.Text = "Clear Proxy"; $btnClearProxy.Font = $smallFont; $btnClearProxy.Cursor = "Hand"
 
@@ -173,7 +168,7 @@ function Update-RoutingToggle {
 }
 Update-RoutingToggle 
 
-# Connect Button precisely 4 pixels below the proxy mode buttons
+# Connect Button precisely 4 pixels below the proxy mode buttons (Y: 109)
 $btnAction = New-Object Windows.Forms.Button; $btnAction.Location = "270, 109"; $btnAction.Size = "300, 60"; $btnAction.BackColor = $colorBtn; $btnAction.ForeColor = $colorText; $btnAction.FlatStyle = "Flat"; $btnAction.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnAction 15; $btnAction.Text = ""; $btnAction.Cursor = [System.Windows.Forms.Cursors]::Hand
 
 $btnAction.Add_Paint({
@@ -235,22 +230,28 @@ $btnDesktop.Add_Click({
 function Update-Application {
     $btnUpdate.Text = "Checking..."; $btnUpdate.Refresh()
     try {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $remoteCode = Invoke-RestMethod -Uri $repoRawUrl -UseBasicParsing
-        if ($remoteCode -match '`$global:currentVersion\s*=\s*"([^"]+)"') {
-            if ([version]$matches[1] -gt [version]$global:currentVersion) {
-                if ([System.Windows.Forms.MessageBox]::Show("Version $($matches[1]) is available! Update now?", "Update", 4, 64) -eq "Yes") {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        $remoteCode = Invoke-RestMethod -Uri $repoRawUrl -UseBasicParsing
+        
+        # Regex fix: properly escape the $ symbol
+        if ($remoteCode -match '\$global:currentVersion\s*=\s*"([^"]+)"') {
+            $remoteVer = $matches[1]
+            if ([version]$remoteVer -gt [version]$global:currentVersion) {
+                if ([System.Windows.Forms.MessageBox]::Show("Version $remoteVer is available! Update now?", "Update Found", 4, 64) -eq "Yes") {
                     Stop-AllEngines
                     
-                    # Direct memory overwrite (No locked file error, no .bat files)
-                    $remoteCode | Set-Content -Path $global:scriptPath -Encoding UTF8 -Force
+                    # Direct force overwrite of local file
+                    $targetPath = Join-Path $global:baseDir "multiplexer.ps1"
+                    $remoteCode | Set-Content -Path $targetPath -Encoding UTF8 -Force
                     
-                    # Relaunch the app smoothly
-                    $vbsPath = Join-Path $global:baseDir "Launch Multiplexer.vbs"
-                    Start-Process "wscript.exe" -ArgumentList "`"$vbsPath`""
-                    
+                    [System.Windows.Forms.MessageBox]::Show("Update successful! Please restart the application.", "Success", 0, 64)
                     [Environment]::Exit(0)
                 }
-            } else { [System.Windows.Forms.MessageBox]::Show("You are already on the latest version!", "Up to Date") }
+            } else { 
+                [System.Windows.Forms.MessageBox]::Show("You are already on the latest version!`n(Local: $global:currentVersion, Remote: $remoteVer)", "Up to Date", 0, 64) 
+            }
+        } else {
+            [System.Windows.Forms.MessageBox]::Show("Could not read the version number from GitHub.", "Update Error", 0, 16)
         }
     } catch {
         [System.Windows.Forms.MessageBox]::Show("Update failed: $_", "Error", 0, 16)
