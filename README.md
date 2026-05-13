@@ -1,5 +1,5 @@
 # Tor Multiplexer For Windows
-  A windows tool to run multiple tor connections and load balance them with HAProxy.
+  A windows tool to run multiple tor connections and load balance them with HAProxy with a simple and feature-full UI.
   Tor but faster!
   
 <img width="605" height="299" alt="Screenshot 2026-05-13 191028" src="https://github.com/user-attachments/assets/2bf8e78d-fb20-4cdd-8ae7-120ad7769266" /> <img width="605" height="474" alt="Screenshot 2026-05-13 191455" src="https://github.com/user-attachments/assets/8dd08124-4472-4e00-b87b-139aa7bb8976" />
