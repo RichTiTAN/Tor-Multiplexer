@@ -1,4 +1,11 @@
-﻿Add-Type -AssemblyName System.Windows.Forms
+﻿# --- ADMIN ELEVATION (SILENT) ---
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) {
+    Start-Process powershell.exe -ArgumentList "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
+    [Environment]::Exit(0)
+}
+
+Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
 # --- LOCK SCOPE FOR EVENT HANDLERS ---
@@ -19,24 +26,26 @@ if (-not ("Win32.WinInet" -as [type])) {
 }
 
 # --- VERSION CONTROL ---
-$global:currentVersion = "4.5" 
+$global:currentVersion = "4.6" 
 $repoRawUrl = "https://raw.githubusercontent.com/RichTiTAN/Tor-Multiplexer/main/multiplexer.ps1"
 
 # --- GLOBAL BOOT FLAG & STATE ---
 $global:abortBoot = $false
 $global:isConnected = $false
 $global:cmdDebugPid = $null 
+$global:cmdDebugPid2 = $null 
 $global:lastTotalBytes = 0
 $global:sessionDataBytes = 0
-
-# --- DYNAMIC BUTTON TEXT STATES ---
-$global:btnMainText = "CONNECT"
-$global:btnSubText  = "(click to start)"
 
 # --- CONFIGURATION & PATHS ---
 $cfgFile = "$global:baseDir\multiplexer_settings.json"
 $xrayDir = "$global:baseDir\Data\Xray"
 $haPath  = "$global:baseDir\Data\HAproxy"
+$sbDir   = "$global:baseDir\Data\sing_box"
+
+# --- DYNAMIC BUTTON TEXT STATES ---
+$global:btnMainText = "CONNECT"
+$global:btnSubText  = "(click to start)"
 
 $autoStart = $true; $launchOnBoot = $false; $lastConfig = "Stable (default)"; $lastBridge = "meek_lite"; $lastCount = "6 (default)"; $global:lastXrayMode = "Proxy Mode"; $global:lastManualSplit = ""; $global:enableDirect = $false; $global:customBridgeLine = ""; $global:v2rayChainJson = ""; $global:enableV2rayChain = $false
 $global:outboundProxyAddress = ""; $global:outboundProxyPort = ""; $global:outboundProxyType = "SOCKS5"; $global:enableOutboundProxy = $false
@@ -69,9 +78,17 @@ if (Test-Path $cfgFile) {
         if ($null -ne $s.EnableOutboundAuth) { $global:enableOutboundAuth = [bool]$s.EnableOutboundAuth }
         if ($null -ne $s.XrayMode) { 
             if ($s.XrayMode -eq "Clear Proxy" -or $s.XrayMode -eq "None") { $global:lastXrayMode = "Clear Proxy" }
+            elseif ($s.XrayMode -eq "VPN Mode") { $global:lastXrayMode = "VPN Mode" }
             else { $global:lastXrayMode = "Proxy Mode" }
         }
     } catch {}
+}
+
+# --- ASSET INTEGRITY CHECK ---
+$global:hasVpnComponents = $true
+if (-not (Test-Path "$xrayDir\wintun.dll") -or -not (Test-Path "$sbDir\sing-box.exe")) {
+    $global:hasVpnComponents = $false
+    if ($global:lastXrayMode -eq "VPN Mode") { $global:lastXrayMode = "Proxy Mode" } # Graceful fallback
 }
 
 # --- THE ULTIMATE IP EXTRACTION ---
@@ -299,24 +316,45 @@ $null = $comboCount.Items.AddRange(@("1","2","3","4","5","6 (default)","7","8"))
 $comboCount.Add_SelectedIndexChanged({ Save-Config })
 
 
-# --- UI LAYOUT: CUSTOM TOGGLES ---
-$btnAutoStartLbl = New-Object Windows.Forms.Button; $btnAutoStartLbl.Location = "20, 80"; $btnAutoStartLbl.Size = "130, 25"; $btnAutoStartLbl.Text = "Auto-connect"; $btnAutoStartLbl.BackColor = $colorTogLbl; $btnAutoStartLbl.ForeColor = $colorText; $btnAutoStartLbl.FlatStyle = "Flat"; $btnAutoStartLbl.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnAutoStartLbl 4; $btnAutoStartLbl.Font = $smallFont
-$btnAutoStartTog = New-Object Windows.Forms.Button; $btnAutoStartTog.Location = "155, 80"; $btnAutoStartTog.Size = "70, 25"; $btnAutoStartTog.FlatStyle = "Flat"; $btnAutoStartTog.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnAutoStartTog 4; $btnAutoStartTog.Font = $smallFont; $btnAutoStartTog.ForeColor = $colorText; $btnAutoStartTog.Cursor = "Hand"
+# --- UI LAYOUT: LEFT SIDE VERTICAL CONTROLS ---
+$btnUpdate = New-Object Windows.Forms.Button; $btnUpdate.Location = "20, 80"; $btnUpdate.Size = "205, 25"; $btnUpdate.Text = "Check for Updates"; $btnUpdate.BackColor = $colorBtn; $btnUpdate.ForeColor = $colorText; $btnUpdate.FlatStyle = "Flat"; $btnUpdate.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnUpdate 4; $btnUpdate.Font = $smallFont; $btnUpdate.Cursor = [System.Windows.Forms.Cursors]::Hand
+
+$btnAutoStartLbl = New-Object Windows.Forms.Button; $btnAutoStartLbl.Location = "20, 110"; $btnAutoStartLbl.Size = "130, 25"; $btnAutoStartLbl.Text = "Auto-connect"; $btnAutoStartLbl.BackColor = $colorTogLbl; $btnAutoStartLbl.ForeColor = $colorText; $btnAutoStartLbl.FlatStyle = "Flat"; $btnAutoStartLbl.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnAutoStartLbl 4; $btnAutoStartLbl.Font = $smallFont
+$btnAutoStartTog = New-Object Windows.Forms.Button; $btnAutoStartTog.Location = "155, 110"; $btnAutoStartTog.Size = "70, 25"; $btnAutoStartTog.FlatStyle = "Flat"; $btnAutoStartTog.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnAutoStartTog 4; $btnAutoStartTog.Font = $smallFont; $btnAutoStartTog.ForeColor = $colorText; $btnAutoStartTog.Cursor = "Hand"
 Set-ToggleState $btnAutoStartTog $autoStart
 
-$btnAdvLbl = New-Object Windows.Forms.Button; $btnAdvLbl.Location = "20, 110"; $btnAdvLbl.Size = "130, 25"; $btnAdvLbl.Text = "Advanced Settings"; $btnAdvLbl.BackColor = $colorTogLbl; $btnAdvLbl.ForeColor = $colorText; $btnAdvLbl.FlatStyle = "Flat"; $btnAdvLbl.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnAdvLbl 4; $btnAdvLbl.Font = $smallFont
-$btnAdvTog = New-Object Windows.Forms.Button; $btnAdvTog.Location = "155, 110"; $btnAdvTog.Size = "70, 25"; $btnAdvTog.FlatStyle = "Flat"; $btnAdvTog.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnAdvTog 4; $btnAdvTog.Font = $smallFont; $btnAdvTog.ForeColor = $colorText; $btnAdvTog.Cursor = "Hand"
+
+$btnAdvLbl = New-Object Windows.Forms.Button; $btnAdvLbl.Location = "20, 140"; $btnAdvLbl.Size = "130, 25"; $btnAdvLbl.Text = "Advanced Settings"; $btnAdvLbl.BackColor = $colorTogLbl; $btnAdvLbl.ForeColor = $colorText; $btnAdvLbl.FlatStyle = "Flat"; $btnAdvLbl.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnAdvLbl 4; $btnAdvLbl.Font = $smallFont
+$btnAdvTog = New-Object Windows.Forms.Button; $btnAdvTog.Location = "155, 140"; $btnAdvTog.Size = "70, 25"; $btnAdvTog.FlatStyle = "Flat"; $btnAdvTog.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnAdvTog 4; $btnAdvTog.Font = $smallFont; $btnAdvTog.ForeColor = $colorText; $btnAdvTog.Cursor = "Hand"
 $showAdvanced = $false
 Set-ToggleState $btnAdvTog $showAdvanced "Show" "Hide"
 
 
 # --- UI LAYOUT: RIGHT-SIDE ACTIONS ---
-$btnProxyMode = New-Object Windows.Forms.Button; $btnProxyMode.Location = "270, 75"; $btnProxyMode.Size = "148, 30"; $btnProxyMode.FlatStyle = "Flat"; $btnProxyMode.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnProxyMode 4; $btnProxyMode.Text = "Proxy Mode"; $btnProxyMode.Font = $smallFont; $btnProxyMode.Cursor = "Hand"
-$btnClearProxy = New-Object Windows.Forms.Button; $btnClearProxy.Location = "422, 75"; $btnClearProxy.Size = "148, 30"; $btnClearProxy.FlatStyle = "Flat"; $btnClearProxy.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnClearProxy 4; $btnClearProxy.Text = "Clear Proxy"; $btnClearProxy.Font = $smallFont; $btnClearProxy.Cursor = "Hand"
+$btnProxyMode = New-Object Windows.Forms.Button; $btnProxyMode.Location = "270, 75"; $btnProxyMode.Size = "97, 30"; $btnProxyMode.FlatStyle = "Flat"; $btnProxyMode.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnProxyMode 4; $btnProxyMode.Text = "Proxy Mode"; $btnProxyMode.Font = $smallFont; $btnProxyMode.Cursor = "Hand"
+
+$btnVpnMode = New-Object Windows.Forms.Button; $btnVpnMode.Location = "372, 75"; $btnVpnMode.Size = "96, 30"; $btnVpnMode.FlatStyle = "Flat"; $btnVpnMode.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnVpnMode 4; $btnVpnMode.Text = "VPN Mode"; $btnVpnMode.Font = $smallFont; 
+if (-not $global:hasVpnComponents) {
+    $btnVpnMode.Cursor = "No"
+    $vpnToolTip = New-Object System.Windows.Forms.ToolTip
+    $vpnToolTip.AutoPopDelay = 5000; $vpnToolTip.InitialDelay = 100; $vpnToolTip.ReshowDelay = 500; $vpnToolTip.ShowAlways = $true
+    $vpnToolTip.SetToolTip($btnVpnMode, "You need to download the full version from GitHub to use VPN Mode.")
+} else {
+    $btnVpnMode.Cursor = "Hand"
+}
+
+$btnClearProxy = New-Object Windows.Forms.Button; $btnClearProxy.Location = "473, 75"; $btnClearProxy.Size = "97, 30"; $btnClearProxy.FlatStyle = "Flat"; $btnClearProxy.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnClearProxy 4; $btnClearProxy.Text = "Clear Proxy"; $btnClearProxy.Font = $smallFont; $btnClearProxy.Cursor = "Hand"
 
 function Update-RoutingToggle {
-    if ($global:lastXrayMode -eq "Proxy Mode") { $btnProxyMode.BackColor = "#4F7C9B"; $btnProxyMode.ForeColor = "#FFFFFF"; $btnClearProxy.BackColor = "#2D3748"; $btnClearProxy.ForeColor = "#A0AEC0" } 
-    else { $btnClearProxy.BackColor = "#4A5568"; $btnClearProxy.ForeColor = "#FFFFFF"; $btnProxyMode.BackColor = "#2D3748"; $btnProxyMode.ForeColor = "#A0AEC0" }
+    $btnProxyMode.BackColor = "#2D3748"; $btnProxyMode.ForeColor = "#A0AEC0"
+    $btnClearProxy.BackColor = "#2D3748"; $btnClearProxy.ForeColor = "#A0AEC0"
+    
+    if (-not $global:hasVpnComponents) { $btnVpnMode.BackColor = "#1A202C"; $btnVpnMode.ForeColor = "#4A5568" } 
+    else { $btnVpnMode.BackColor = "#2D3748"; $btnVpnMode.ForeColor = "#A0AEC0" }
+    
+    if ($global:lastXrayMode -eq "Proxy Mode") { $btnProxyMode.BackColor = "#4F7C9B"; $btnProxyMode.ForeColor = "#FFFFFF" } 
+    elseif ($global:lastXrayMode -eq "VPN Mode" -and $global:hasVpnComponents) { $btnVpnMode.BackColor = "#4F7C9B"; $btnVpnMode.ForeColor = "#FFFFFF" }
+    elseif ($global:lastXrayMode -eq "Clear Proxy") { $btnClearProxy.BackColor = "#4A5568"; $btnClearProxy.ForeColor = "#FFFFFF" }
 }
 Update-RoutingToggle 
 
@@ -338,7 +376,7 @@ $btnAction.Add_Paint({
 $btnAction.Add_Click({ if ($global:isConnected -or $global:btnMainText -eq "CONNECTING...") { Stop-AllEngines } else { Start-Engines } })
 
 
-# --- UI LAYOUT: ADVANCED OPTIONS ---
+# --- UI LAYOUT: ADVANCED OPTIONS (CLEAN 2-COLUMN GRID) ---
 $lblAdvSepTitle = New-Object Windows.Forms.Label; $lblAdvSepTitle.Text = "Advanced Options"; $lblAdvSepTitle.ForeColor = "#A0AEC0"; $lblAdvSepTitle.Font = $smallFont; $lblAdvSepTitle.Location = "20, 185"; $lblAdvSepTitle.AutoSize = $true; $lblAdvSepTitle.Visible = $false
 $lblAdvSepLine = New-Object Windows.Forms.Label; $lblAdvSepLine.BackColor = "#3A3F44"; $lblAdvSepLine.Size = "420, 1"; $lblAdvSepLine.Location = "150, 194"; $lblAdvSepLine.Visible = $false
 
@@ -368,9 +406,6 @@ Set-ToggleState $btnDebugTog $debugMode
 
 $btnDesktop = New-Object Windows.Forms.Button; $btnDesktop.Location = "300, 285"; $btnDesktop.Size = "270, 25"; $btnDesktop.Text = "Create Desktop Shortcut"; $btnDesktop.BackColor = $colorBtn; $btnDesktop.ForeColor = $colorText; $btnDesktop.FlatStyle = "Flat"; $btnDesktop.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnDesktop 4; $btnDesktop.Font = $smallFont; $btnDesktop.Cursor = [System.Windows.Forms.Cursors]::Hand; $btnDesktop.Visible = $false
 
-# ROW 4 (Centered) (Y=320)
-$btnUpdate = New-Object Windows.Forms.Button; $btnUpdate.Location = "165, 320"; $btnUpdate.Size = "270, 25"; $btnUpdate.Text = "Check for Updates"; $btnUpdate.BackColor = $colorBtn; $btnUpdate.ForeColor = $colorText; $btnUpdate.FlatStyle = "Flat"; $btnUpdate.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnUpdate 4; $btnUpdate.Font = $smallFont; $btnUpdate.Cursor = [System.Windows.Forms.Cursors]::Hand; $btnUpdate.Visible = $false
-
 
 # --- SOCKS & STATS PANELS ---
 $pnlSocks = New-Object Windows.Forms.Panel; $pnlSocks.Size = "260, 65"; $pnlSocks.BackColor = "#2D3748"; $pnlSocks.Location = "20, 185"
@@ -394,13 +429,13 @@ function Toggle-AdvancedView {
     $btnDirectConfig.Visible = $show; $btnDirectTog.Visible = $show
     $btnV2rayConfig.Visible = $show; $btnV2rayTog.Visible = $show
     $btnOutboundConfig.Visible = $show; $btnOutboundTog.Visible = $show
-    $btnDesktop.Visible = $show; $btnUpdate.Visible = $show
+    $btnDesktop.Visible = $show; 
     $btnBootLbl.Visible = $show; $btnBootTog.Visible = $show
     $btnDebugLbl.Visible = $show; $btnDebugTog.Visible = $show
 
     if ($show) { 
-        $form.ClientSize = New-Object Drawing.Size(600, 440)
-        $pnlSocks.Location = "20, 360"; $pnlStats.Location = "300, 360"
+        $form.ClientSize = New-Object Drawing.Size(600, 420)
+        $pnlSocks.Location = "20, 335"; $pnlStats.Location = "300, 335" # Precise 25px gap
     } else { 
         $form.ClientSize = New-Object Drawing.Size(600, 265)
         $pnlSocks.Location = "20, 185"; $pnlStats.Location = "300, 185"
@@ -548,10 +583,7 @@ function Update-Application {
             $remoteVer = $matches[1]
             if ([version]$remoteVer -gt [version]$global:currentVersion) {
                 if ([System.Windows.Forms.MessageBox]::Show("Version $remoteVer is available! Update now?", "Update Found", 4, 64) -eq "Yes") {
-                    
-                    # Direct raw file download 
                     Invoke-WebRequest -Uri $repoRawUrl -OutFile $global:scriptPath
-                    
                     [System.Windows.Forms.MessageBox]::Show("Update downloaded successfully! Please close and restart the application manually to apply the changes.", "Update Complete", 0, 64)
                 }
             } else { [System.Windows.Forms.MessageBox]::Show("You are already on the latest version!`n(Local: $global:currentVersion, Remote: $remoteVer)", "Up to Date", 0, 64) }
@@ -583,9 +615,16 @@ $toggleAction = {
 }
 $btnProxyMode.Add_Click({ &$toggleAction "Proxy Mode" }); $btnClearProxy.Add_Click({ &$toggleAction "Clear Proxy" })
 
+$btnVpnMode.Add_Click({ 
+    if (-not $global:hasVpnComponents) { return }
+    &$toggleAction "VPN Mode" 
+})
+
 # --- CORE FUNCTIONS ---
 function Write-XrayConfig {
-    $rules = @( @{ type="field"; ip=@("127.0.0.0/8", "::1", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"); outboundTag="direct" } )
+    $rules = @( 
+        @{ type="field"; ip=@("127.0.0.0/8", "::1", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"); outboundTag="direct" }
+    )
     $domains = @(); $ips = @()
     if ($global:enableDirect -and $global:lastManualSplit -ne "") {
         $list = $global:lastManualSplit.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
@@ -594,7 +633,9 @@ function Write-XrayConfig {
         if ($ips.Count -gt 0) { $rules += @{ type="field"; ip=$ips; outboundTag="direct" } }
     }
     
-    $inbound = @{ listen="0.0.0.0"; port=10818; protocol="mixed"; settings=@{ udp=$true }; sniffing=@{ enabled=$true; destOverride=@("http","tls","quic","fakedns") } }
+    $rules += @{ type="field"; network="tcp,udp"; outboundTag="proxy" }
+    
+    $inboundArr = @( @{ listen="0.0.0.0"; port=10818; protocol="mixed"; settings=@{ udp=$true }; sniffing=@{ enabled=$true; destOverride=@("http","tls","quic","fakedns") } } )
     
     $outbounds = @()
     if ($global:enableV2rayChain -and -not [string]::IsNullOrWhiteSpace($global:v2rayChainJson)) {
@@ -630,48 +671,51 @@ function Write-XrayConfig {
     }
     
     $outbounds += @{ tag="direct"; protocol="freedom"; settings=@{} }
-    $config = @{ log = @{ logLevel="warning" }; inbounds = @($inbound); outbounds = $outbounds; routing = @{ domainStrategy="AsIs"; rules=$rules } }
+    $config = @{ log = @{ logLevel="warning" }; inbounds = $inboundArr; outbounds = $outbounds; routing = @{ domainStrategy="AsIs"; rules=$rules } }
     $config | ConvertTo-Json -Depth 10 | Set-Content "$xrayDir\config.json"
+}
+
+function Write-SingboxConfig {
+    $sbDir = "$global:baseDir\Data\sing_box"
+    $sbConfig = @{
+        log = @{ level = "warn" }
+        dns = @{ servers = @( @{ tag = "dns_proxy"; server = "1.1.1.1"; type = "tcp"; detour = "proxy" } ); final = "dns_proxy" }
+        inbounds = @( @{ type = "tun"; tag = "tun-in"; interface_name = "singbox_tun"; address = @("172.18.0.1/30", "fdfe:dcba:9876::1/126"); mtu = 9000; auto_route = $true; strict_route = $true; stack = "gvisor" } )
+        outbounds = @( @{ type = "socks"; tag = "proxy"; server = "127.0.0.1"; server_port = 10818 }, @{ type = "direct"; tag = "direct" } )
+        route = @{ default_domain_resolver = "dns_proxy"; auto_detect_interface = $true; rules = @( @{ action = "sniff" }, @{ port = @(53); action = "hijack-dns" }, @{ protocol = "dns"; action = "hijack-dns" }, @{ process_name = @("tor.exe", "haproxy.exe", "lyrebird.exe", "obfs4proxy.exe", "snowflake-client.exe", "xray.exe", "sing-box.exe"); outbound = "direct" }, @{ ip_is_private = $true; outbound = "direct" } ); final = "proxy" }
+    }
+    $sbConfig | ConvertTo-Json -Depth 10 | Set-Content "$sbDir\config.json"
 }
 
 function Set-SystemProxy($enable) {
     $path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
-    if ($enable) { Set-ItemProperty $path -Name "ProxyEnable" -Value 1; Set-ItemProperty $path -Name "ProxyServer" -Value "127.0.0.1:10818" } 
-    else { Set-ItemProperty $path -Name "ProxyEnable" -Value 0 }
-    
-    [Win32.WinInet]::InternetSetOption([IntPtr]::Zero, 39, [IntPtr]::Zero, 0) | Out-Null
-    [Win32.WinInet]::InternetSetOption([IntPtr]::Zero, 37, [IntPtr]::Zero, 0) | Out-Null
+    if ($enable) { Set-ItemProperty $path -Name "ProxyEnable" -Value 1; Set-ItemProperty $path -Name "ProxyServer" -Value "127.0.0.1:10818" } else { Set-ItemProperty $path -Name "ProxyEnable" -Value 0 }
+    [Win32.WinInet]::InternetSetOption([IntPtr]::Zero, 39, [IntPtr]::Zero, 0) | Out-Null; [Win32.WinInet]::InternetSetOption([IntPtr]::Zero, 37, [IntPtr]::Zero, 0) | Out-Null
 }
 
 function Restart-Xray($targetMode) {
-    Get-Process xray -ErrorAction SilentlyContinue | ForEach-Object { try { if ($null -ne $_.Path -and $_.Path -eq "$xrayDir\xray.exe") { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue } } catch {} }
+    Get-Process sing-box, xray -ErrorAction SilentlyContinue | ForEach-Object { try { if ($null -ne $_.Path -and ($_.Path -eq "$xrayDir\xray.exe" -or $_.Path -eq "$global:baseDir\Data\sing_box\sing-box.exe")) { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue } } catch {} }
     if ($null -ne $global:cmdDebugPid) { Stop-Process -Id $global:cmdDebugPid -Force -ErrorAction SilentlyContinue; $global:cmdDebugPid = $null }
+    if ($null -ne $global:cmdDebugPid2) { Stop-Process -Id $global:cmdDebugPid2 -Force -ErrorAction SilentlyContinue; $global:cmdDebugPid2 = $null }
     Start-Sleep -Milliseconds 500
     Write-XrayConfig
-    if ($script:debugMode) { $p = Start-Process "cmd.exe" -ArgumentList "/c `"title XrayDebug & .\xray.exe run -c config.json || pause`"" -WorkingDirectory $xrayDir -WindowStyle Normal -PassThru; $global:cmdDebugPid = $p.Id } 
-    else { Start-Process -FilePath "$xrayDir\xray.exe" -ArgumentList "run -c config.json" -WorkingDirectory $xrayDir -WindowStyle Hidden }
-    if ($targetMode -eq "Proxy Mode") { Set-SystemProxy $true } else { Set-SystemProxy $false }
+    if ($script:debugMode) { $p = Start-Process "cmd.exe" -ArgumentList "/c `"title XrayDebug & .\xray.exe run -c config.json || pause`"" -WorkingDirectory $xrayDir -WindowStyle Normal -PassThru; $global:cmdDebugPid = $p.Id } else { Start-Process -FilePath "$xrayDir\xray.exe" -ArgumentList "run -c config.json" -WorkingDirectory $xrayDir -WindowStyle Hidden }
+    if ($targetMode -eq "VPN Mode") {
+        Write-SingboxConfig; $sbDir = "$global:baseDir\Data\sing_box"
+        if ($script:debugMode) { $p2 = Start-Process "cmd.exe" -ArgumentList "/c `"title SingBoxDebug & .\sing-box.exe run -c config.json || pause`"" -WorkingDirectory $sbDir -WindowStyle Normal -PassThru; $global:cmdDebugPid2 = $p2.Id } else { Start-Process -FilePath "$sbDir\sing-box.exe" -ArgumentList "run -c config.json" -WorkingDirectory $sbDir -WindowStyle Hidden }
+    } elseif ($targetMode -eq "Proxy Mode") { Set-SystemProxy $true }
+    if ($targetMode -ne "Proxy Mode") { Set-SystemProxy $false }
 }
 
-function Reset-ButtonText { 
-    $global:btnMainText = "CONNECT"
-    $global:btnSubText = "(click to start)"
-    $btnAction.Refresh() 
-}
+function Reset-ButtonText { $global:btnMainText = "CONNECT"; $global:btnSubText = "(click to start)"; $btnAction.Refresh() }
 
 function Stop-AllEngines($isClosing = $false) {
     $global:abortBoot = $true; Set-SystemProxy $false; $statsTimer.Stop()
-    Get-Process tor, haproxy, xray -ErrorAction SilentlyContinue | ForEach-Object { try { $p = $_.Path; if ($null -ne $p -and ($p -eq "$xrayDir\xray.exe" -or $p -eq "$haPath\haproxy.exe" -or $p -match "Data\\Tors\\Tor")) { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue } } catch {} }
+    Get-Process tor, haproxy, xray, sing-box -ErrorAction SilentlyContinue | ForEach-Object { try { $p = $_.Path; if ($null -ne $p -and ($p -eq "$xrayDir\xray.exe" -or $p -eq "$haPath\haproxy.exe" -or $p -eq "$global:baseDir\Data\sing_box\sing-box.exe" -or $p -match "Data\\Tors\\Tor")) { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue } } catch {} }
     if ($null -ne $global:cmdDebugPid) { Stop-Process -Id $global:cmdDebugPid -Force -ErrorAction SilentlyContinue; $global:cmdDebugPid = $null }
+    if ($null -ne $global:cmdDebugPid2) { Stop-Process -Id $global:cmdDebugPid2 -Force -ErrorAction SilentlyContinue; $global:cmdDebugPid2 = $null }
     $global:isConnected = $false; $global:lastTotalBytes = 0; $global:sessionDataBytes = 0
-    
-    if (-not $isClosing) {
-        Reset-ButtonText
-        $btnAction.Enabled = $true
-        $lblSocksDataIPs.Text = "Waiting for connection..."
-        $lblSocksDataTags.Text = ""
-        $lblStatsData.Text = "Speed: 0 KB/s`nTotal: 0 MB"
-    }
+    if (-not $isClosing) { Reset-ButtonText; $btnAction.Enabled = $true; $lblSocksDataIPs.Text = "Waiting for connection..."; $lblSocksDataTags.Text = ""; $lblStatsData.Text = "Speed: 0 KB/s`nTotal: 0 MB" }
 }
 
 function Wait-NonBlocking($s) { $end = (Get-Date).AddSeconds($s); while((Get-Date) -lt $end) { if($global:abortBoot){return}; [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -ms 100 } }
@@ -686,101 +730,84 @@ function Format-HAProxyConfig($activeCount) {
                 if ([int]$matches[1] -le $activeCount) { $newHaData += ($line -replace "^\s*#+\s*", "    ") } else { if ($line -notmatch "^\s*#") { $newHaData += "    # $line" } else { $newHaData += $line } }
             } else { $newHaData += $line }
         }
-        if (-not $hasStats) {
-            $newHaData += ""
-            $newHaData += "listen stats"
-            $newHaData += "    bind 127.0.0.1:10888"
-            $newHaData += "    mode http"
-            $newHaData += "    stats enable"
-            $newHaData += "    stats uri /stats"
-        }
+        if (-not $hasStats) { $newHaData += ""; $newHaData += "listen stats"; $newHaData += "    bind 127.0.0.1:10888"; $newHaData += "    mode http"; $newHaData += "    stats enable"; $newHaData += "    stats uri /stats" }
         $newHaData | Set-Content $haPathCfg
     }
 }
 
 function Start-Engines {
     if (Get-Process tor -ErrorAction SilentlyContinue) { $global:btnSubText = "Clearing old engines..."; $btnAction.Refresh(); [System.Windows.Forms.Application]::DoEvents(); Stop-AllEngines; Start-Sleep -Seconds 1 }
-    $global:abortBoot = $false; $selBridge = $comboBridge.SelectedItem
-    $selConfig = if ($comboConfig.SelectedItem.ToString() -match "Stable") { "Stable" } else { "Fast" }; $selCount = [int]($comboCount.SelectedItem.ToString().Replace(" (default)", ""))
-    $mode = $global:lastXrayMode; $cfgFileTarget = if ($selConfig -eq "Stable") { "torrc" } else { "torrc2" }
-
-    Save-Config
+    $global:abortBoot = $false; $selBridge = $comboBridge.SelectedItem; $selConfig = if ($comboConfig.SelectedItem.ToString() -match "Stable") { "Stable" } else { "Fast" }; $selCount = [int]($comboCount.SelectedItem.ToString().Replace(" (default)", ""))
+    $mode = $global:lastXrayMode; $cfgFileTarget = if ($selConfig -eq "Stable") { "torrc" } else { "torrc2" }; Save-Config
     $winStyle = if ($script:debugMode) { "Normal" } else { "Hidden" }; $global:btnMainText = "CONNECTING..."; Format-HAProxyConfig $selCount; $dynamicWait = 16 - $selCount
-    
     for ($i=1; $i -le $selCount; $i++) {
         if ($global:abortBoot) { break } 
         $global:btnSubText = "Booting Tor $i of $selCount... (click to abort)"; $btnAction.Refresh(); [System.Windows.Forms.Application]::DoEvents()
         $path = "$global:baseDir\Data\Tors\Tor$i"
         if (Test-Path "$path\$cfgFileTarget") {
-            
-            $c = @(Get-Content "$path\$cfgFileTarget")
-            $cleanConfig = @()
-            foreach ($line in $c) {
-                if ($line -match "^# --- MANAGED BRIDGES ---") { break }
-                if ($line -notmatch "^UseBridges" -and $line -notmatch "^ClientTransportPlugin" -and $line -notmatch "^Bridge" -and $line -notmatch "^HTTPSProxy" -and $line -notmatch "^Socks5Proxy") {
-                    if ($line.Trim() -ne "") { $cleanConfig += $line.Trim() }
-                }
-            }
-            
-            $cleanConfig += "" 
-            $cleanConfig += "# --- MANAGED BRIDGES ---"
-            
+            $c = @(Get-Content "$path\$cfgFileTarget"); $cleanConfig = @()
+            foreach ($line in $c) { if ($line -match "^# --- MANAGED BRIDGES ---") { break }; if ($line -notmatch "^UseBridges" -and $line -notmatch "^ClientTransportPlugin" -and $line -notmatch "^Bridge" -and $line -notmatch "^HTTPSProxy" -and $line -notmatch "^Socks5Proxy" -and $line -notmatch "^Socks5ProxyUsername" -and $line -notmatch "^Socks5ProxyPassword" -and $line -notmatch "^HTTPSProxyAuthenticator") { if ($line.Trim() -ne "") { $cleanConfig += $line.Trim() } } }
+            $cleanConfig += ""; $cleanConfig += "# --- MANAGED BRIDGES ---"
             if ($global:enableOutboundProxy -and -not [string]::IsNullOrWhiteSpace($global:outboundProxyAddress) -and -not [string]::IsNullOrWhiteSpace($global:outboundProxyPort)) {
-                if ($global:outboundProxyType -eq "SOCKS5") {
-                    $cleanConfig += "Socks5Proxy $($global:outboundProxyAddress):$($global:outboundProxyPort)"
-                    if ($global:enableOutboundAuth -and -not [string]::IsNullOrWhiteSpace($global:outboundProxyUser) -and -not [string]::IsNullOrWhiteSpace($global:outboundProxyPass)) {
-                        $cleanConfig += "Socks5ProxyUsername $($global:outboundProxyUser)"
-                        $cleanConfig += "Socks5ProxyPassword $($global:outboundProxyPass)"
-                    }
-                } elseif ($global:outboundProxyType -eq "HTTPS") {
-                    $cleanConfig += "HTTPSProxy $($global:outboundProxyAddress):$($global:outboundProxyPort)"
-                    if ($global:enableOutboundAuth -and -not [string]::IsNullOrWhiteSpace($global:outboundProxyUser) -and -not [string]::IsNullOrWhiteSpace($global:outboundProxyPass)) {
-                        $cleanConfig += "HTTPSProxyAuthenticator $($global:outboundProxyUser):$($global:outboundProxyPass)"
-                    }
-                }
+                if ($global:outboundProxyType -eq "SOCKS5") { $cleanConfig += "Socks5Proxy $($global:outboundProxyAddress):$($global:outboundProxyPort)"; if ($global:enableOutboundAuth -and -not [string]::IsNullOrWhiteSpace($global:outboundProxyUser) -and -not [string]::IsNullOrWhiteSpace($global:outboundProxyPass)) { $cleanConfig += "Socks5ProxyUsername $($global:outboundProxyUser)"; $cleanConfig += "Socks5ProxyPassword $($global:outboundProxyPass)" }
+                } elseif ($global:outboundProxyType -eq "HTTPS") { $cleanConfig += "HTTPSProxy $($global:outboundProxyAddress):$($global:outboundProxyPort)"; if ($global:enableOutboundAuth -and -not [string]::IsNullOrWhiteSpace($global:outboundProxyUser) -and -not [string]::IsNullOrWhiteSpace($global:outboundProxyPass)) { $cleanConfig += "HTTPSProxyAuthenticator $($global:outboundProxyUser):$($global:outboundProxyPass)" } }
             }
-
-            if ($selBridge -eq "Custom" -and $global:customBridgeLine -ne "") { 
-                $cleanConfig += "UseBridges 1"
-                $cleanConfig += "ClientTransportPlugin meek_lite,obfs2,obfs3,obfs4,scramblesuit,webtunnel,snowflake exec ..\..\PluggableTransports\lyrebird.exe"
-                
-                $customLines = $global:customBridgeLine.Split("`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" -and $_ -notmatch "^ClientTransportPlugin" }
-                foreach ($cl in $customLines) {
-                    if ($cl -notmatch "^Bridge\s") { $cleanConfig += "Bridge $cl" } 
-                    else { $cleanConfig += $cl }
-                }
-            } 
-            elseif ($selBridge -ne "Direct (None)") { 
-                $b = $bridgeData[$selBridge]
-                $cleanConfig += "UseBridges 1"
-                $cleanConfig += $b.plugin
-                foreach ($line in $b.lines) { $cleanConfig += $line }
-            } else { 
-                $cleanConfig += "UseBridges 0" 
-            }
-            
-            $cleanConfig | Set-Content "$path\$cfgFileTarget"
-            
-            Start-Process -FilePath "$path\tor.exe" -ArgumentList "-f $cfgFileTarget" -WorkingDirectory $path -WindowStyle $winStyle
-            Wait-NonBlocking $dynamicWait
+            if ($selBridge -eq "Custom" -and $global:customBridgeLine -ne "") { $cleanConfig += "UseBridges 1"; $cleanConfig += "ClientTransportPlugin meek_lite,obfs2,obfs3,obfs4,scramblesuit,webtunnel,snowflake exec ..\..\PluggableTransports\lyrebird.exe"; $customLines = $global:customBridgeLine.Split("`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" -and $_ -notmatch "^ClientTransportPlugin" }; foreach ($cl in $customLines) { if ($cl -notmatch "^Bridge\s") { $cleanConfig += "Bridge $cl" } else { $cleanConfig += $cl } }
+            } elseif ($selBridge -ne "Direct (None)") { $b = $bridgeData[$selBridge]; $cleanConfig += "UseBridges 1"; $cleanConfig += $b.plugin; foreach ($line in $b.lines) { $cleanConfig += $line } } else { $cleanConfig += "UseBridges 0" }
+            $cleanConfig | Set-Content "$path\$cfgFileTarget"; Start-Process -FilePath "$path\tor.exe" -ArgumentList "-f $cfgFileTarget" -WorkingDirectory $path -WindowStyle $winStyle; Wait-NonBlocking $dynamicWait
         }
     }
-    
     if (-not $global:abortBoot) {
-        $global:btnSubText = "Booting Core Engines... (click to abort)"; $btnAction.Refresh(); [System.Windows.Forms.Application]::DoEvents()
-        if (Test-Path "$haPath\haproxy.exe") { Start-Process -FilePath "$haPath\haproxy.exe" -ArgumentList "-f haproxy.cfg" -WorkingDirectory $haPath -WindowStyle $winStyle }
-        Restart-Xray $mode
-        
-        $lblSocksDataIPs.Text = "127.0.0.1:10818`n$lanIp`:10818"
-        $lblSocksDataTags.Text = "(Local)`n(LAN)"
-
-        $global:isConnected = $true; $global:btnMainText = "CONNECTED"; $global:btnSubText = "(click to disconnect)"; $btnAction.Enabled = $true
-        $lblStatsData.Text = "Speed: 0 KB/s`nTotal: 0 KB"
-        $statsTimer.Start()
-    } else { Reset-ButtonText; $btnAction.Enabled = $true }
-    $btnAction.Refresh()
+        $global:btnSubText = "Booting Core Engines... (click to abort)"; $btnAction.Refresh(); [System.Windows.Forms.Application]::DoEvents(); if (Test-Path "$haPath\haproxy.exe") { Start-Process -FilePath "$haPath\haproxy.exe" -ArgumentList "-f haproxy.cfg" -WorkingDirectory $haPath -WindowStyle $winStyle }; Restart-Xray $mode
+        $lblSocksDataIPs.Text = "127.0.0.1:10818`n$lanIp`:10818"; $lblSocksDataTags.Text = "(Local)`n(LAN)"; $global:isConnected = $true; $global:btnMainText = "CONNECTED"; $global:btnSubText = "(click to disconnect)"; $btnAction.Enabled = $true; $lblStatsData.Text = "Speed: 0 KB/s`nTotal: 0 KB"; $statsTimer.Start()
+    } else { Reset-ButtonText; $btnAction.Enabled = $true }; $btnAction.Refresh()
 }
 
-$form.Add_Shown({ Toggle-AdvancedView; if ($autoStart -and -not $isFirstLaunch) { Wait-NonBlocking 1; if (-not $global:abortBoot) { Start-Engines } } else { Stop-AllEngines } })
-$form.Controls.AddRange(@($lblBridge, $comboBridge, $lblConfig, $comboConfig, $lblCount, $comboCount, $btnProxyMode, $btnClearProxy, $btnAction, $btnAutoStartLbl, $btnAutoStartTog, $btnAdvLbl, $btnAdvTog, $lblAdvSepTitle, $lblAdvSepLine, $btnDirectConfig, $btnDirectTog, $btnV2rayConfig, $btnV2rayTog, $btnOutboundConfig, $btnOutboundTog, $btnBootLbl, $btnBootTog, $btnDebugLbl, $btnDebugTog, $btnDesktop, $btnUpdate, $pnlSocks, $pnlStats))
+$form.Add_Shown({ 
+    if (-not $global:hasVpnComponents) {
+        $dlg = New-Object Windows.Forms.Form
+        $dlg.Text = "Missing Components"
+        $dlg.Size = New-Object Drawing.Size(420, 210)
+        $dlg.StartPosition = "CenterParent"
+        $dlg.BackColor = $colorBg
+        $dlg.FormBorderStyle = "FixedDialog"
+        $dlg.MaximizeBox = $false
+
+        $lbl = New-Object Windows.Forms.Label
+        $lbl.Text = "You have successfully updated to v4.6!`n`nHowever, your installation is missing newly added core files (Sing-box and wintun.dll). Because of this major upgrade, you must download the full package from GitHub to use VPN Mode."
+        $lbl.ForeColor = $colorText
+        $lbl.Location = "15,15"
+        $lbl.Size = "375, 80"
+        $lbl.Font = $smallFont
+        
+        $btnGit = New-Object Windows.Forms.Button
+        $btnGit.Text = "Open GitHub"
+        $btnGit.Location = "15, 115"
+        $btnGit.Size = "130, 30"
+        $btnGit.BackColor = $colorBtn
+        $btnGit.ForeColor = $colorText
+        $btnGit.FlatStyle = "Flat"
+        Set-RoundedCorners $btnGit 4
+        $btnGit.Add_Click({ Start-Process "https://github.com/RichTiTAN/Tor-Multiplexer"; $dlg.Close() })
+
+        $btnClose = New-Object Windows.Forms.Button
+        $btnClose.Text = "Continue without VPN"
+        $btnClose.Location = "220, 115"
+        $btnClose.Size = "170, 30"
+        $btnClose.BackColor = $colorBtn
+        $btnClose.ForeColor = $colorText
+        $btnClose.FlatStyle = "Flat"
+        Set-RoundedCorners $btnClose 4
+        $btnClose.Add_Click({ $dlg.Close() })
+
+        $dlg.Controls.AddRange(@($lbl, $btnGit, $btnClose))
+        $dlg.ShowDialog() | Out-Null
+        $dlg.Dispose()
+    }
+
+    Toggle-AdvancedView
+    if ($autoStart -and -not $isFirstLaunch) { Wait-NonBlocking 1; if (-not $global:abortBoot) { Start-Engines } } else { Stop-AllEngines } 
+})
+
+$form.Controls.AddRange(@($lblBridge, $comboBridge, $lblConfig, $comboConfig, $lblCount, $comboCount, $btnProxyMode, $btnVpnMode, $btnClearProxy, $btnAction, $btnUpdate, $btnAutoStartLbl, $btnAutoStartTog, $btnAdvLbl, $btnAdvTog, $lblAdvSepTitle, $lblAdvSepLine, $btnDirectConfig, $btnDirectTog, $btnV2rayConfig, $btnV2rayTog, $btnOutboundConfig, $btnOutboundTog, $btnBootLbl, $btnBootTog, $btnDebugLbl, $btnDebugTog, $btnDesktop, $pnlSocks, $pnlStats))
 $form.ShowDialog()
