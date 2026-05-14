@@ -123,7 +123,7 @@ function Set-RoundedCorners($control, $radius) {
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     Title="Tor Multiplexer - v$global:currentVersion" Height="295" Width="605" 
     WindowStartupLocation="CenterScreen" Background="#1A1A1B" Foreground="#E2E8F0"
-    ResizeMode="NoResize" FontFamily="Segoe UI">
+    ResizeMode="CanMinimize" FontFamily="Segoe UI">
     
     <Window.Resources>
         <Style TargetType="ComboBox" x:Key="DarkComboBox">
