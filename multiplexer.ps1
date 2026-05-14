@@ -774,7 +774,7 @@ $form.Add_Shown({
         $dlg.MaximizeBox = $false
 
         $lbl = New-Object Windows.Forms.Label
-        $lbl.Text = "You have successfully updated to v4.6!`n`nHowever, your installation is missing newly added core files (Sing-box and wintun.dll). Because of this major upgrade, you must download the full package from GitHub to use VPN Mode."
+        $lbl.Text = "You have successfully updated to v4.6!`n`nHowever, your installation is missing newly added core files (Sing-box). Because of this upgrade, you must download the full package from GitHub to use VPN Mode."
         $lbl.ForeColor = $colorText
         $lbl.Location = "15,15"
         $lbl.Size = "375, 80"
