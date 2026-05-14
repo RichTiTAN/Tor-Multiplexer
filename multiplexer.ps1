@@ -755,8 +755,14 @@ function Update-Application {
         if ($remoteCode -match '\$global:currentVersion\s*=\s*"([^"]+)"') {
             $remoteVer = $matches[1]
             if ([version]$remoteVer -gt [version]$global:currentVersion) {
-                [System.Windows.Forms.MessageBox]::Show("Version $remoteVer is available!`n`nThis update contains critical new system components (Sing-box) and MUST be downloaded manually from GitHub to work correctly.`n`nClick OK to open the GitHub release page.", "Manual Update Required", 0, 64)
-                Start-Process "https://github.com/RichTiTAN/Tor-Multiplexer"
+                $msg = [System.Windows.Forms.MessageBox]::Show("Version $remoteVer is available! Would you like to update now?", "Update Available", 4, 64)
+                if ($msg -eq "Yes") {
+                    $btnUpdate.Content = "Updating..."
+                    DoEvents
+                    Invoke-WebRequest -Uri $repoRawUrl -OutFile $global:scriptPath
+                    Start-Process powershell.exe -ArgumentList "-STA -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$global:scriptPath`""
+                    [Environment]::Exit(0)
+                }
             } else { [System.Windows.Forms.MessageBox]::Show("You are already on the latest version!`n(Local: $global:currentVersion, Remote: $remoteVer)", "Up to Date", 0, 64) }
         } else { [System.Windows.Forms.MessageBox]::Show("Could not read the version number from GitHub.", "Update Error", 0, 16) }
     } catch { [System.Windows.Forms.MessageBox]::Show("Update check failed: $_", "Error", 0, 16) }
