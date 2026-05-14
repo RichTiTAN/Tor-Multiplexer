@@ -28,7 +28,7 @@ if (-not ("Win32.WinInet" -as [type])) {
 }
 
 # --- VERSION CONTROL & GLOBALS ---
-$global:currentVersion = "4.7" 
+$global:currentVersion = "4.7.1" 
 $repoRawUrl = "https://raw.githubusercontent.com/RichTiTAN/Tor-Multiplexer/main/multiplexer.ps1"
 $global:abortBoot = $false
 $global:isConnected = $false
@@ -770,22 +770,28 @@ function Update-Application {
 }
 
 function Update-BootShortcut {
-    $startupFolder = [Environment]::GetFolderPath('Startup')
-    $shortcutPath = Join-Path $startupFolder "TorMultiplexer.lnk"
+    $taskName = "TorMultiplexer_AutoStart"
     if ($script:launchOnBoot) {
         try { 
-            $WshShell = New-Object -ComObject WScript.Shell
-            $Shortcut = $WshShell.CreateShortcut($shortcutPath)
-            $Shortcut.TargetPath = Join-Path $global:baseDir "Launch Multiplexer.vbs"
-            $Shortcut.WorkingDirectory = $global:baseDir
-            $Shortcut.Save() 
+            # High-Privilege Scheduled Task Creation (Bypasses UAC Prompt, UI remains visible)
+            $action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "`"$global:baseDir\Launch Multiplexer.vbs`"" -WorkingDirectory $global:baseDir
+            $trigger = New-ScheduledTaskTrigger -AtLogOn
+            $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
+            $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit 0
+            Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
         } catch { 
-            [System.Windows.Forms.MessageBox]::Show("Failed to create Startup shortcut.", "Error", 0, 16)
+            [System.Windows.Forms.MessageBox]::Show("Failed to create Auto-Start task.`n$($_.Exception.Message)", "Error", 0, 16)
             $script:launchOnBoot = $false; Set-WpfToggleState $btnBootTog $false
         }
-    } else { if (Test-Path $shortcutPath) { Remove-Item $shortcutPath -Force -ErrorAction SilentlyContinue } }
+    } else { 
+        try { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue } catch {}
+    }
+    
+    # Clean up legacy .lnk shortcut if it exists from older versions
+    $startupFolder = [Environment]::GetFolderPath('Startup')
+    $oldShortcut = Join-Path $startupFolder "TorMultiplexer.lnk"
+    if (Test-Path $oldShortcut) { Remove-Item $oldShortcut -Force -ErrorAction SilentlyContinue }
 }
-
 # --- STATS ENGINE (WPF Dispatcher Timer) ---
 $global:webClient = New-Object System.Net.WebClient
 $global:isFetchingStats = $false
