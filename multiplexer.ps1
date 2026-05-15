@@ -28,8 +28,9 @@ if (-not ("Win32.WinInet" -as [type])) {
 }
 
 # --- VERSION CONTROL & GLOBALS ---
-$global:currentVersion = "4.7.1" 
+$global:currentVersion = "4.7.2" 
 $repoRawUrl = "https://raw.githubusercontent.com/RichTiTAN/Tor-Multiplexer/main/multiplexer.ps1"
+$global:forceManualUpdate = $false
 $global:abortBoot = $false
 $global:isConnected = $false
 $global:cmdDebugPid = $null 
@@ -37,6 +38,9 @@ $global:cmdDebugPid2 = $null
 $global:lastTotalBytes = 0
 $global:sessionDataBytes = 0
 $global:appInitialized = $false
+
+# Stats Smoothing Buffer
+$global:speedSamples = @(0,0,0,0,0)
 
 # --- CONFIGURATION & PATHS ---
 $cfgFile = "$global:baseDir\multiplexer_settings.json"
@@ -752,9 +756,25 @@ function Update-Application {
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         $remoteCode = Invoke-RestMethod -Uri $repoRawUrl -UseBasicParsing
+        
+        # 1. Extract Remote Version
         if ($remoteCode -match '\$global:currentVersion\s*=\s*"([^"]+)"') {
             $remoteVer = $matches[1]
+            
             if ([version]$remoteVer -gt [version]$global:currentVersion) {
+                
+                # 2. CHECK REMOTE CODE FOR THE MANUAL TOGGLE
+                $isManualRequired = $remoteCode -match '\$global:forceManualUpdate\s*=\s*\$true'
+                
+                if ($isManualRequired) {
+                    [System.Windows.Forms.MessageBox]::Show("A major update ($remoteVer) is available!`n`nThis version contains critical component changes and MUST be downloaded manually from GitHub.`n`nClick OK to open the release page.", "Manual Update Required", 0, 64)
+                    Start-Process "https://github.com/RichTiTAN/Tor-Multiplexer"
+                    $btnUpdate.Content = "Check for Updates"
+                    $btnUpdate.Background = $brushBtnBg
+                    return
+                }
+
+                # 3. Standard Auto-Update if no manual flag found
                 $msg = [System.Windows.Forms.MessageBox]::Show("Version $remoteVer is available! Would you like to update now?", "Update Available", 4, 64)
                 if ($msg -eq "Yes") {
                     $btnUpdate.Content = "Updating..."
@@ -764,9 +784,35 @@ function Update-Application {
                     [Environment]::Exit(0)
                 }
             } else { [System.Windows.Forms.MessageBox]::Show("You are already on the latest version!`n(Local: $global:currentVersion, Remote: $remoteVer)", "Up to Date", 0, 64) }
-        } else { [System.Windows.Forms.MessageBox]::Show("Could not read the version number from GitHub.", "Update Error", 0, 16) }
+        }
     } catch { [System.Windows.Forms.MessageBox]::Show("Update check failed: $_", "Error", 0, 16) }
     $btnUpdate.Content = "Check for Updates"
+    $btnUpdate.Background = $brushBtnBg
+}
+
+function Check-UpdateSilent {
+    $updateWebClient = New-Object System.Net.WebClient
+    $updateWebClient.Add_DownloadStringCompleted({
+        param($sender, $e)
+        if (-not $e.Cancelled -and $e.Error -eq $null) {
+            try {
+                $remoteCode = $e.Result
+                if ($remoteCode -match '\$global:currentVersion\s*=\s*"([^"]+)"') {
+                    $remoteVer = $matches[1]
+                    if ([version]$remoteVer -gt [version]$global:currentVersion) {
+                        $form.Dispatcher.Invoke([System.Action]{ 
+                            $btnUpdate.Content = "NEW UPDATE AVAILABLE"
+                            $btnUpdate.Background = $brushActiveRouting 
+                        })
+                    }
+                }
+            } catch {}
+        }
+        $sender.Dispose()
+    })
+    
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    try { $updateWebClient.DownloadStringAsync([uri]$repoRawUrl) } catch {}
 }
 
 function Update-BootShortcut {
@@ -792,15 +838,16 @@ function Update-BootShortcut {
     $oldShortcut = Join-Path $startupFolder "TorMultiplexer.lnk"
     if (Test-Path $oldShortcut) { Remove-Item $oldShortcut -Force -ErrorAction SilentlyContinue }
 }
-# --- STATS ENGINE (WPF Dispatcher Timer) ---
-$global:webClient = New-Object System.Net.WebClient
+# --- SMOOTH STATS ENGINE ---
+$global:statsWebClient = New-Object System.Net.WebClient
 $global:isFetchingStats = $false
 
-$global:webClient.Add_DownloadStringCompleted({
+$global:statsWebClient.Add_DownloadStringCompleted({
     param($sender, $e)
     if (-not $e.Cancelled -and $e.Error -eq $null) {
         try {
-            $rows = $e.Result -split "`n"
+            $res = $e.Result
+            $rows = $res -split "`n"
             $torServers = $rows | Where-Object { $_ -match ",tor\d+," }
             $currentBytes = 0
             foreach ($server in $torServers) { 
@@ -809,10 +856,14 @@ $global:webClient.Add_DownloadStringCompleted({
             }
             
             if ($global:lastTotalBytes -gt 0) {
-                $diff = $currentBytes - $global:lastTotalBytes
-                if ($diff -lt 0) { $diff = 0 } 
+                $diff = [Math]::Max(0, ($currentBytes - $global:lastTotalBytes))
                 $global:sessionDataBytes += $diff
-                $speedStr = if ($diff -ge 1048576) { "$([Math]::Round($diff/1048576, 2)) MB/s" } elseif ($diff -ge 1024) { "$([Math]::Round($diff/1024, 1)) KB/s" } else { "$diff B/s" }
+                
+                # Update Buffer (Last 5 seconds)
+                $global:speedSamples = @($diff) + $global:speedSamples[0..3]
+                $avgDiff = ($global:speedSamples | Measure-Object -Average).Average
+                
+                $speedStr = if ($avgDiff -ge 1048576) { "$([Math]::Round($avgDiff/1048576, 2)) MB/s" } elseif ($avgDiff -ge 1024) { "$([Math]::Round($avgDiff/1024, 1)) KB/s" } else { "$([int]$avgDiff) B/s" }
                 $totStr = if ($global:sessionDataBytes -ge 1073741824) { "$([Math]::Round($global:sessionDataBytes/1073741824, 2)) GB" } elseif ($global:sessionDataBytes -ge 1048576) { "$([Math]::Round($global:sessionDataBytes/1048576, 1)) MB" } else { "$([Math]::Round($global:sessionDataBytes/1024, 1)) KB" }
                 
                 $form.Dispatcher.Invoke([System.Action]{ $lblStatsData.Text = "Speed: $speedStr`nTotal: $totStr" })
@@ -828,7 +879,7 @@ $statsTimer.Interval = [TimeSpan]::FromSeconds(1)
 $statsTimer.add_Tick({
     if ($global:isConnected -and -not $global:isFetchingStats) {
         $global:isFetchingStats = $true
-        try { $global:webClient.DownloadStringAsync([uri]"http://127.0.0.1:10888/stats;csv") } catch { $global:isFetchingStats = $false }
+        try { $global:statsWebClient.DownloadStringAsync([uri]"http://127.0.0.1:10888/stats;csv") } catch { $global:isFetchingStats = $false }
     }
 })
 $statsTimer.Start()
@@ -941,6 +992,8 @@ $form.add_Closed({ [Environment]::Exit(0) })
 $form.add_ContentRendered({ 
     if ($global:appInitialized) { return }
     $global:appInitialized = $true
+    
+    Check-UpdateSilent 
 
     if (-not $global:hasVpnComponents -and $isFirstLaunch) {
         $dlg = New-Object Windows.Forms.Form
