@@ -214,17 +214,17 @@ function Set-RoundedCorners($control, $radius) {
 
     <Canvas>
         <Border Background="#2D3748" Canvas.Left="20" Canvas.Top="20" Width="85" Height="26" CornerRadius="4,0,0,4">
-            <TextBlock Text="Bridge Type" FontSize="11" Foreground="#E2E8F0" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            <TextBlock Text="Bridge Type" FontSize="11" Foreground="#E2E8F0" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-1,0,0"/>
         </Border>
         <ComboBox Name="comboBridge" Canvas.Left="105" Canvas.Top="20" Width="85" Height="26" FontSize="11" Style="{StaticResource DarkComboBox}"/>
         
         <Border Background="#2D3748" Canvas.Left="210" Canvas.Top="20" Width="85" Height="26" CornerRadius="4,0,0,4">
-            <TextBlock Text="Routing" FontSize="11" Foreground="#E2E8F0" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            <TextBlock Text="Routing" FontSize="11" Foreground="#E2E8F0" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-1,0,0"/>
         </Border>
         <ComboBox Name="comboConfig" Canvas.Left="295" Canvas.Top="20" Width="85" Height="26" FontSize="11" Style="{StaticResource DarkComboBox}"/>
 
         <Border Background="#2D3748" Canvas.Left="400" Canvas.Top="20" Width="85" Height="26" CornerRadius="4,0,0,4">
-            <TextBlock Text="Tor Engines" FontSize="11" Foreground="#E2E8F0" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            <TextBlock Text="Tor Engines" FontSize="11" Foreground="#E2E8F0" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-1,0,0"/>
         </Border>
         <ComboBox Name="comboCount" Canvas.Left="485" Canvas.Top="20" Width="85" Height="26" FontSize="11" Style="{StaticResource DarkComboBox}"/>
 
