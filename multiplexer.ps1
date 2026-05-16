@@ -28,11 +28,12 @@ if (-not ("Win32.WinInet" -as [type])) {
 }
 
 # --- VERSION CONTROL & GLOBALS ---
-$global:currentVersion = "4.7.2" 
+$global:currentVersion = "4.7.5" 
 $repoRawUrl = "https://raw.githubusercontent.com/RichTiTAN/Tor-Multiplexer/main/multiplexer.ps1"
 $global:forceManualUpdate = $false
 $global:abortBoot = $false
 $global:isConnected = $false
+$global:isEngineRunning = $false
 $global:cmdDebugPid = $null 
 $global:cmdDebugPid2 = $null 
 $global:lastTotalBytes = 0
@@ -203,7 +204,7 @@ function Set-RoundedCorners($control, $radius) {
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}" CornerRadius="8">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="4">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                     </ControlTemplate>
@@ -287,7 +288,50 @@ function Set-RoundedCorners($control, $radius) {
             <Button Name="btnDebugLbl" Canvas.Left="20" Canvas.Top="100" Width="170" Height="25" Content="Debug Mode" Style="{StaticResource DarkButton}" Background="#2D3748" FontSize="11"/>
             <Button Name="btnDebugTog" Canvas.Left="195" Canvas.Top="100" Width="85" Height="25" Content="Disabled" Style="{StaticResource DarkButton}" Background="#8B4A4A" FontSize="11"/>
 
-            <Button Name="btnDesktop" Canvas.Left="300" Canvas.Top="100" Width="270" Height="25" Content="Create Desktop Shortcut" Style="{StaticResource DarkButton}" FontSize="11"/>
+            <Button Name="btnLogsLbl" Canvas.Left="300" Canvas.Top="100" Width="180" Height="25" Content="Live Logs" Style="{StaticResource DarkButton}" Background="#2D3748" FontSize="11"/>
+            <Button Name="btnLogsTog" Canvas.Left="485" Canvas.Top="100" Width="85" Height="25" Content="Show" Style="{StaticResource DarkButton}" FontSize="11"/>
+
+            <Button Name="btnDesktop" Canvas.Left="20" Canvas.Top="135" Width="260" Height="25" Content="Create Desktop Shortcut" Style="{StaticResource DarkButton}" FontSize="11"/>
+            
+            <!-- Contact Box Group (Symmetrical & Scaled) -->
+            <Border Canvas.Left="300" Canvas.Top="135" Width="270" Height="26" Background="#1A202C" BorderBrush="#2D3748" BorderThickness="1" CornerRadius="4">
+                <Canvas>
+                    <Border Background="#2D3748" Width="90" Height="24" CornerRadius="3,0,0,3">
+                        <TextBlock Text="Find Me On" Foreground="#A0AEC0" FontSize="11" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-1,0,0"/>
+                    </Border>
+                    <Button Name="btnGithub" Canvas.Left="90" Width="89" Height="24" Content="GitHub" Style="{StaticResource DarkButton}" Background="#1A202C" FontSize="11"/>
+                    <Rectangle Canvas.Left="179" Width="1" Height="24" Fill="#2D3748"/>
+                    <Button Name="btnTelegram" Canvas.Left="180" Width="88" Height="24" Content="Telegram" Style="{StaticResource DarkButton}" Background="#1A202C" FontSize="11"/>
+                </Canvas>
+            </Border>
+        </Canvas>
+
+        <!-- LIVE LOGS PANEL -->
+        <Canvas Name="LogsCanvas" Canvas.Left="585" Canvas.Top="20" Width="300" Height="225" Visibility="Hidden" Opacity="0">
+            <Border Name="logBorder" Background="#121417" Width="300" Height="225" CornerRadius="4" BorderBrush="#2D3748" BorderThickness="1">
+                <Canvas>
+                    <TextBlock Text="TOR BOOTSTRAP STATUS" Canvas.Left="15" Canvas.Top="10" Foreground="#A0AEC0" FontSize="10" FontWeight="Bold"/>
+                    
+                    <!-- Left Column -->
+                    <TextBlock Name="lblTor1" Text="Tor 01: Offline" Canvas.Left="15" Canvas.Top="30" Foreground="#4A5568" FontSize="12" FontFamily="Consolas"/>
+                    <TextBlock Name="lblTor2" Text="Tor 02: Offline" Canvas.Left="15" Canvas.Top="48" Foreground="#4A5568" FontSize="12" FontFamily="Consolas"/>
+                    <TextBlock Name="lblTor3" Text="Tor 03: Offline" Canvas.Left="15" Canvas.Top="66" Foreground="#4A5568" FontSize="12" FontFamily="Consolas"/>
+                    <TextBlock Name="lblTor4" Text="Tor 04: Offline" Canvas.Left="15" Canvas.Top="84" Foreground="#4A5568" FontSize="12" FontFamily="Consolas"/>
+                    
+                    <!-- Right Column -->
+                    <TextBlock Name="lblTor5" Text="Tor 05: Offline" Canvas.Left="155" Canvas.Top="30" Foreground="#4A5568" FontSize="12" FontFamily="Consolas"/>
+                    <TextBlock Name="lblTor6" Text="Tor 06: Offline" Canvas.Left="155" Canvas.Top="48" Foreground="#4A5568" FontSize="12" FontFamily="Consolas"/>
+                    <TextBlock Name="lblTor7" Text="Tor 07: Offline" Canvas.Left="155" Canvas.Top="66" Foreground="#4A5568" FontSize="12" FontFamily="Consolas"/>
+                    <TextBlock Name="lblTor8" Text="Tor 08: Offline" Canvas.Left="155" Canvas.Top="84" Foreground="#4A5568" FontSize="12" FontFamily="Consolas"/>
+                    
+                    <Rectangle Canvas.Left="15" Canvas.Top="110" Width="270" Height="1" Fill="#2D3748" />
+                    <TextBlock Text="CONNECTIONS" Canvas.Left="15" Canvas.Top="120" Foreground="#A0AEC0" FontSize="10" FontWeight="Bold" />
+                    
+                    <TextBox Name="txtXrayLogs" Canvas.Left="15" Canvas.Top="138" Width="270" Height="75" 
+                             Background="#0A0C0F" Foreground="#68D391" BorderBrush="#2D3748" BorderThickness="1" 
+                             FontSize="10" TextWrapping="Wrap" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Hidden" IsReadOnly="True" FontFamily="Consolas" />
+                </Canvas>
+            </Border>
         </Canvas>
     </Canvas>
 </Window>
@@ -322,8 +366,15 @@ $btnBootLbl = $form.FindName("btnBootLbl")
 $btnBootTog = $form.FindName("btnBootTog")
 $btnDebugLbl = $form.FindName("btnDebugLbl")
 $btnDebugTog = $form.FindName("btnDebugTog")
+$btnLogsLbl = $form.FindName("btnLogsLbl")
+$btnLogsTog = $form.FindName("btnLogsTog")
 $btnDesktop = $form.FindName("btnDesktop")
+$btnGithub = $form.FindName("btnGithub")
+$btnTelegram = $form.FindName("btnTelegram")
 $AdvancedCanvas = $form.FindName("AdvancedCanvas")
+$LogsCanvas = $form.FindName("LogsCanvas")
+$logBorder = $form.FindName("logBorder")
+$txtXrayLogs = $form.FindName("txtXrayLogs")
 $SocksPanel = $form.FindName("SocksPanel")
 $StatsPanel = $form.FindName("StatsPanel")
 $lblSocksTitle = $form.FindName("lblSocksTitle")
@@ -402,12 +453,9 @@ function Update-RoutingToggle {
     }
     if ($global:lastXrayMode -eq "Proxy Mode") { $btnProxyMode.Background = $brushActiveRouting; $btnProxyMode.Foreground = "#FFFFFF" } elseif ($global:lastXrayMode -eq "VPN Mode" -and $global:hasVpnComponents) { $btnVpnMode.Background = $brushActiveRouting; $btnVpnMode.Foreground = "#FFFFFF" } elseif ($global:lastXrayMode -eq "Clear Proxy") { $btnClearProxy.Background = $brushActiveRouting; $btnClearProxy.Foreground = "#FFFFFF" }
 
-    # GRAY OUT and FORCE OFF Split Tunneling when VPN Mode is active
     if ($global:lastXrayMode -eq "VPN Mode" -and $global:hasVpnComponents) {
-        # Force the feature off internally and update the button color/text
         $global:enableDirect = $false
         Set-WpfToggleState $btnDirectTog $false
-        
         $btnDirectConfig.IsEnabled = $false; $btnDirectConfig.Opacity = 0.5
         $btnDirectTog.IsEnabled = $false; $btnDirectTog.Opacity = 0.5
     } else {
@@ -578,7 +626,7 @@ function Write-XrayConfig {
     } else { $outbounds += @{ tag="proxy"; protocol="socks"; settings=@{ servers=@(@{ address="127.0.0.1"; port=10800 }) } } }
     
     $outbounds += @{ tag="direct"; protocol="freedom"; settings=@{} }
-    $config = @{ log = @{ logLevel="warning" }; inbounds = $inboundArr; outbounds = $outbounds; routing = @{ domainStrategy="AsIs"; rules=$rules } }
+    $config = @{ log = @{ logLevel="info"; access="access.log"; error="error.log" }; inbounds = $inboundArr; outbounds = $outbounds; routing = @{ domainStrategy="AsIs"; rules=$rules } }
     $config | ConvertTo-Json -Depth 10 | Set-Content "$xrayDir\config.json"
 }
 
@@ -658,6 +706,8 @@ function Reset-ButtonText {
 
 function Stop-AllEngines($isClosing = $false) {
     $global:abortBoot = $true; Set-SystemProxy $false
+    $global:isEngineRunning = $false
+    
     Get-Process tor, haproxy, xray, sing-box -ErrorAction SilentlyContinue | ForEach-Object { try { $p = $_.Path; if ($null -ne $p -and ($p -eq "$xrayDir\xray.exe" -or $p -eq "$haPath\haproxy.exe" -or $p -eq "$global:baseDir\Data\sing_box\sing-box.exe" -or $p -match "Data\\Tors\\Tor")) { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue } } catch {} }
     if ($null -ne $global:cmdDebugPid) { Stop-Process -Id $global:cmdDebugPid -Force -ErrorAction SilentlyContinue; $global:cmdDebugPid = $null }
     if ($null -ne $global:cmdDebugPid2) { Stop-Process -Id $global:cmdDebugPid2 -Force -ErrorAction SilentlyContinue; $global:cmdDebugPid2 = $null }
@@ -680,6 +730,18 @@ function Start-Engines {
         $selConfig = if ($comboConfig.SelectedItem.Tag -match "Stable") { "Stable" } else { "Fast" }; $selCount = [int]($comboCount.SelectedItem.Tag)
         $mode = $global:lastXrayMode; $cfgFileTarget = if ($selConfig -eq "Stable") { "torrc" } else { "torrc2" }
 
+        # Pre-clean logs so the UI displays correctly during boot
+        for ($i=1; $i -le 8; $i++) {
+            Remove-Item "$global:baseDir\Data\Tors\Tor$i\tor.log" -ErrorAction SilentlyContinue
+            $lbl = $form.FindName("lblTor$i")
+            if ($null -ne $lbl -and $i -le $selCount) { $lbl.Text = "Tor 0$($i): Waiting..."; $lbl.Foreground = "#A0AEC0" }
+            elseif ($null -ne $lbl) { $lbl.Text = "Tor 0$($i): Disabled"; $lbl.Foreground = "#4A5568" }
+        }
+        Remove-Item "$xrayDir\access.log" -ErrorAction SilentlyContinue
+        Remove-Item "$xrayDir\access.log.tmp" -ErrorAction SilentlyContinue
+        if ($null -ne $txtXrayLogs) { $txtXrayLogs.Text = "" }
+
+        $global:isEngineRunning = $true
         Save-Config
         $winStyle = if ($script:debugMode) { "Normal" } else { "Hidden" }
         
@@ -697,18 +759,19 @@ function Start-Engines {
                 $c = @(Get-Content "$path\$cfgFileTarget"); $cleanConfig = @()
                 foreach ($line in $c) {
                     if ($line -match "^# --- MANAGED BRIDGES ---") { break }
-                    if ($line -notmatch "^UseBridges" -and $line -notmatch "^ClientTransportPlugin" -and $line -notmatch "^Bridge" -and $line -notmatch "^HTTPSProxy" -and $line -notmatch "^Socks5Proxy" -and $line -notmatch "^Socks5ProxyUsername" -and $line -notmatch "^Socks5ProxyPassword" -and $line -notmatch "^HTTPSProxyAuthenticator") {
+                    if ($line -notmatch "^UseBridges" -and $line -notmatch "^ClientTransportPlugin" -and $line -notmatch "^Bridge" -and $line -notmatch "^HTTPSProxy" -and $line -notmatch "^Socks5Proxy" -and $line -notmatch "^Socks5ProxyUsername" -and $line -notmatch "^Socks5ProxyPassword" -and $line -notmatch "^HTTPSProxyAuthenticator" -and $line -notmatch "^Log notice file") {
                         if ($line.Trim() -ne "") { $cleanConfig += $line.Trim() }
                     }
                 }
                 $cleanConfig += ""; $cleanConfig += "# --- MANAGED BRIDGES ---"
+                $cleanConfig += "Log notice file tor.log"
                 
                 if ($global:enableOutboundProxy -and -not [string]::IsNullOrWhiteSpace($global:outboundProxyAddress) -and -not [string]::IsNullOrWhiteSpace($global:outboundProxyPort)) {
                     if ($global:outboundProxyType -eq "SOCKS5") {
                         $cleanConfig += "Socks5Proxy $($global:outboundProxyAddress):$($global:outboundProxyPort)"
                         if ($global:enableOutboundAuth -and -not [string]::IsNullOrWhiteSpace($global:outboundProxyUser) -and -not [string]::IsNullOrWhiteSpace($global:outboundProxyPass)) { $cleanConfig += "Socks5ProxyUsername $($global:outboundProxyUser)"; $cleanConfig += "Socks5ProxyPassword $($global:outboundProxyPass)" }
                     } elseif ($global:outboundProxyType -eq "HTTPS") {
-                        $cleanConfig += "HTTPSProxy $($global:outboundProxyAddress):$($global:outboundProxyPort)"
+                        $cleanConfig += "HTTPSProxy $($global:outboundProxyAddress):$global:outboundProxyPort"
                         if ($global:enableOutboundAuth -and -not [string]::IsNullOrWhiteSpace($global:outboundProxyUser) -and -not [string]::IsNullOrWhiteSpace($global:outboundProxyPass)) { $cleanConfig += "HTTPSProxyAuthenticator $($global:outboundProxyUser):$($global:outboundProxyPass)" }
                     }
                 }
@@ -731,6 +794,10 @@ function Start-Engines {
         
         if (-not $global:abortBoot) {
             $btnActionSubText.Text = "Booting Core Engines... (click to abort)"; DoEvents
+            
+            Remove-Item "$xrayDir\access.log" -ErrorAction SilentlyContinue
+            Remove-Item "$xrayDir\error.log" -ErrorAction SilentlyContinue
+
             if (Test-Path "$haPath\haproxy.exe") { Start-Process -FilePath "$haPath\haproxy.exe" -ArgumentList "-f haproxy.cfg" -WorkingDirectory $haPath -WindowStyle $winStyle }
             Restart-Xray $mode
             
@@ -757,15 +824,11 @@ function Update-Application {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         $remoteCode = Invoke-RestMethod -Uri $repoRawUrl -UseBasicParsing
         
-        # 1. Extract Remote Version
         if ($remoteCode -match '\$global:currentVersion\s*=\s*"([^"]+)"') {
             $remoteVer = $matches[1]
-            
             if ([version]$remoteVer -gt [version]$global:currentVersion) {
                 
-                # 2. CHECK REMOTE CODE FOR THE MANUAL TOGGLE
                 $isManualRequired = $remoteCode -match '\$global:forceManualUpdate\s*=\s*\$true'
-                
                 if ($isManualRequired) {
                     [System.Windows.Forms.MessageBox]::Show("A major update ($remoteVer) is available!`n`nThis version contains critical component changes and MUST be downloaded manually from GitHub.`n`nClick OK to open the release page.", "Manual Update Required", 0, 64)
                     Start-Process "https://github.com/RichTiTAN/Tor-Multiplexer"
@@ -774,7 +837,6 @@ function Update-Application {
                     return
                 }
 
-                # 3. Standard Auto-Update if no manual flag found
                 $msg = [System.Windows.Forms.MessageBox]::Show("Version $remoteVer is available! Would you like to update now?", "Update Available", 4, 64)
                 if ($msg -eq "Yes") {
                     $btnUpdate.Content = "Updating..."
@@ -810,7 +872,6 @@ function Check-UpdateSilent {
         }
         $sender.Dispose()
     })
-    
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     try { $updateWebClient.DownloadStringAsync([uri]$repoRawUrl) } catch {}
 }
@@ -819,7 +880,6 @@ function Update-BootShortcut {
     $taskName = "TorMultiplexer_AutoStart"
     if ($script:launchOnBoot) {
         try { 
-            # High-Privilege Scheduled Task Creation (Bypasses UAC Prompt, UI remains visible)
             $action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "`"$global:baseDir\Launch Multiplexer.vbs`"" -WorkingDirectory $global:baseDir
             $trigger = New-ScheduledTaskTrigger -AtLogOn
             $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
@@ -829,15 +889,12 @@ function Update-BootShortcut {
             [System.Windows.Forms.MessageBox]::Show("Failed to create Auto-Start task.`n$($_.Exception.Message)", "Error", 0, 16)
             $script:launchOnBoot = $false; Set-WpfToggleState $btnBootTog $false
         }
-    } else { 
-        try { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue } catch {}
-    }
-    
-    # Clean up legacy .lnk shortcut if it exists from older versions
+    } else { try { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue } catch {} }
     $startupFolder = [Environment]::GetFolderPath('Startup')
     $oldShortcut = Join-Path $startupFolder "TorMultiplexer.lnk"
     if (Test-Path $oldShortcut) { Remove-Item $oldShortcut -Force -ErrorAction SilentlyContinue }
 }
+
 # --- SMOOTH STATS ENGINE ---
 $global:statsWebClient = New-Object System.Net.WebClient
 $global:isFetchingStats = $false
@@ -854,18 +911,13 @@ $global:statsWebClient.Add_DownloadStringCompleted({
                 $cols = $server -split ","
                 if ($cols.Count -ge 10) { $currentBytes += [long]$cols[8] + [long]$cols[9] } 
             }
-            
             if ($global:lastTotalBytes -gt 0) {
                 $diff = [Math]::Max(0, ($currentBytes - $global:lastTotalBytes))
                 $global:sessionDataBytes += $diff
-                
-                # Update Buffer (Last 5 seconds)
                 $global:speedSamples = @($diff) + $global:speedSamples[0..3]
                 $avgDiff = ($global:speedSamples | Measure-Object -Average).Average
-                
                 $speedStr = if ($avgDiff -ge 1048576) { "$([Math]::Round($avgDiff/1048576, 2)) MB/s" } elseif ($avgDiff -ge 1024) { "$([Math]::Round($avgDiff/1024, 1)) KB/s" } else { "$([int]$avgDiff) B/s" }
                 $totStr = if ($global:sessionDataBytes -ge 1073741824) { "$([Math]::Round($global:sessionDataBytes/1073741824, 2)) GB" } elseif ($global:sessionDataBytes -ge 1048576) { "$([Math]::Round($global:sessionDataBytes/1048576, 1)) MB" } else { "$([Math]::Round($global:sessionDataBytes/1024, 1)) KB" }
-                
                 $form.Dispatcher.Invoke([System.Action]{ $lblStatsData.Text = "Speed: $speedStr`nTotal: $totStr" })
             }
             if ($currentBytes -gt 0) { $global:lastTotalBytes = $currentBytes }
@@ -884,6 +936,125 @@ $statsTimer.add_Tick({
 })
 $statsTimer.Start()
 
+# --- WINDOW SIZING & ANIMATION STATE MACHINE ---
+function Update-WindowSize {
+    $targetW = if ($script:isLogsOpen) { 905.0 } else { 605.0 }
+    $targetH = if ($script:isAdvancedOpen) { 480.0 } else { 295.0 }
+    
+    $advOpac = if ($script:isAdvancedOpen) { 1.0 } else { 0.0 }
+    $logOpac = if ($script:isLogsOpen) { 1.0 } else { 0.0 }
+    $panelTop = if ($script:isAdvancedOpen) { 365.0 } else { 180.0 }
+    $logsH = if ($script:isAdvancedOpen) { 410.0 } else { 225.0 }
+    $xrayH = if ($script:isAdvancedOpen) { 260.0 } else { 75.0 }
+
+    if ($script:isAdvancedOpen) { $AdvancedCanvas.Visibility = "Visible" }
+    if ($script:isLogsOpen) { 
+        $LogsCanvas.Visibility = "Visible"
+        $logTimer.Start() 
+    } else {
+        $logTimer.Stop()
+    }
+
+    $wAnim = New-Object System.Windows.Media.Animation.DoubleAnimation($targetW, (New-Object TimeSpan 0,0,0,0,300))
+    $hAnim = New-Object System.Windows.Media.Animation.DoubleAnimation($targetH, (New-Object TimeSpan 0,0,0,0,300))
+    $form.BeginAnimation([System.Windows.Window]::WidthProperty, $wAnim)
+    $form.BeginAnimation([System.Windows.Window]::HeightProperty, $hAnim)
+
+    $advFade = New-Object System.Windows.Media.Animation.DoubleAnimation($advOpac, (New-Object TimeSpan 0,0,0,0,300))
+    $logFade = New-Object System.Windows.Media.Animation.DoubleAnimation($logOpac, (New-Object TimeSpan 0,0,0,0,300))
+    $AdvancedCanvas.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $advFade)
+    $LogsCanvas.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $logFade)
+
+    $slideAnim = New-Object System.Windows.Media.Animation.DoubleAnimation($panelTop, (New-Object TimeSpan 0,0,0,0,300))
+    $SocksPanel.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty, $slideAnim)
+    $StatsPanel.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty, $slideAnim)
+
+    $logsHeightAnim = New-Object System.Windows.Media.Animation.DoubleAnimation($logsH, (New-Object TimeSpan 0,0,0,0,300))
+    $logBorder.BeginAnimation([System.Windows.FrameworkElement]::HeightProperty, $logsHeightAnim)
+    $LogsCanvas.BeginAnimation([System.Windows.FrameworkElement]::HeightProperty, $logsHeightAnim)
+
+    $xrayHeightAnim = New-Object System.Windows.Media.Animation.DoubleAnimation($xrayH, (New-Object TimeSpan 0,0,0,0,300))
+    $txtXrayLogs.BeginAnimation([System.Windows.FrameworkElement]::HeightProperty, $xrayHeightAnim)
+
+    if (-not $script:isAdvancedOpen) {
+        $script:hideAdvTimer = New-Object System.Windows.Threading.DispatcherTimer
+        $script:hideAdvTimer.Interval = [TimeSpan]::FromMilliseconds(300)
+        $script:hideAdvTimer.add_Tick({ $script:hideAdvTimer.Stop(); $AdvancedCanvas.Visibility = "Hidden" })
+        $script:hideAdvTimer.Start()
+    }
+    if (-not $script:isLogsOpen) {
+        $script:hideLogTimer = New-Object System.Windows.Threading.DispatcherTimer
+        $script:hideLogTimer.Interval = [TimeSpan]::FromMilliseconds(300)
+        $script:hideLogTimer.add_Tick({ $script:hideLogTimer.Stop(); $LogsCanvas.Visibility = "Hidden" })
+        $script:hideLogTimer.Start()
+    }
+}
+
+# --- LIVE LOGS PARSER ENGINE ---
+$script:isLogsOpen = $false
+$logTimer = New-Object System.Windows.Threading.DispatcherTimer
+$logTimer.Interval = [TimeSpan]::FromMilliseconds(1000)
+$logTimer.add_Tick({
+    try {
+        if (-not $script:isLogsOpen) { return }
+        if ($null -eq $comboCount.SelectedItem) { return }
+        
+        if (-not $global:isEngineRunning) {
+            for ($i=1; $i -le 8; $i++) {
+                $lbl = $form.FindName("lblTor$i")
+                if ($null -ne $lbl) { $lbl.Text = "Tor 0$($i): Offline"; $lbl.Foreground = "#4A5568" }
+            }
+            if ($null -ne $txtXrayLogs) { $txtXrayLogs.Text = "" }
+            return
+        }
+
+        $selCount = [int]($comboCount.SelectedItem.Tag)
+        
+        # 1. Parse Tor Bootstrap Logs safely
+        for ($i=1; $i -le 8; $i++) {
+            $lbl = $form.FindName("lblTor$i")
+            if ($null -eq $lbl) { continue }
+            if ($i -gt $selCount) { $lbl.Text = "Tor 0$($i): Disabled"; $lbl.Foreground = "#4A5568"; continue }
+            
+            $logPath = "$global:baseDir\Data\Tors\Tor$i\tor.log"
+            if (Test-Path $logPath) {
+                try {
+                    $fs = New-Object System.IO.FileStream($logPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+                    $sr = New-Object System.IO.StreamReader($fs)
+                    $content = $sr.ReadToEnd()
+                    $sr.Close(); $fs.Close()
+                    
+                    $matches = [regex]::Matches($content, 'Bootstrapped (\d+)%')
+                    if ($matches.Count -gt 0) {
+                        $pct = $matches[$matches.Count - 1].Groups[1].Value
+                        $lbl.Text = "Tor 0$($i): $pct%"
+                        if ($pct -eq "100") { $lbl.Foreground = "#68D391" } else { $lbl.Foreground = "#F6AD55" }
+                    } else { $lbl.Text = "Tor 0$($i): Booting..."; $lbl.Foreground = "#A0AEC0" }
+                } catch {}
+            } else { $lbl.Text = "Tor 0$($i): Waiting..."; $lbl.Foreground = "#A0AEC0" }
+        }
+        
+        # 2. Parse Xray Connection Logs safely
+        $xrayLogPath = "$xrayDir\access.log"
+        if (Test-Path $xrayLogPath) {
+            try {
+                $fs = New-Object System.IO.FileStream($xrayLogPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+                $sr = New-Object System.IO.StreamReader($fs)
+                $content = $sr.ReadToEnd()
+                $sr.Close(); $fs.Close()
+                
+                $lines = $content -split "`r?`n" | Where-Object { $_ -match "accepted" -or $_ -match "proxy" }
+                $tail = $lines | Select-Object -Last 15
+                $cleaned = $tail | ForEach-Object { $_ -replace "^.*?\s\d{2}:\d{2}:\d{2}\s+(127\.0\.0\.1:\d+\s+)?", "" }
+                if ($null -ne $txtXrayLogs) {
+                    $txtXrayLogs.Text = $cleaned -join "`n"
+                    $txtXrayLogs.ScrollToEnd()
+                }
+            } catch {}
+        }
+    } catch {}
+})
+
 # --- EVENT BINDINGS ---
 $comboBridge.add_SelectionChanged({
     if ($comboBridge.SelectedItem.Tag -eq "Custom") { if (-not (Show-CustomBridgeDialog)) { Set-ComboSelectedTag $comboBridge $global:previousBridge } else { $global:previousBridge = "Custom" } } else { $global:previousBridge = $comboBridge.SelectedItem.Tag }
@@ -893,8 +1064,8 @@ $comboConfig.add_SelectionChanged({ Save-Config })
 $comboCount.add_SelectionChanged({ Save-Config })
 
 $btnAction.add_Click({ if ($global:isConnected -or $btnActionMainText.Text -eq "CONNECTING...") { Stop-AllEngines } else { Start-Engines } })
-
 $btnUpdate.add_Click({ Update-Application })
+
 $btnDesktop.add_Click({
     $deskFolder = [Environment]::GetFolderPath('Desktop')
     $shortcutPath = Join-Path $deskFolder "TorMultiplexer.lnk"
@@ -905,10 +1076,11 @@ $btnDesktop.add_Click({
         $Shortcut.WorkingDirectory = $global:baseDir
         $Shortcut.Save()
         [System.Windows.Forms.MessageBox]::Show("Desktop shortcut created successfully!", "Success", 0, 64)
-    } catch {
-        [System.Windows.Forms.MessageBox]::Show("Failed to create Desktop shortcut.`n" + $_.Exception.Message, "Error", 0, 16)
-    }
+    } catch { [System.Windows.Forms.MessageBox]::Show("Failed to create Desktop shortcut.`n" + $_.Exception.Message, "Error", 0, 16) }
 })
+
+$btnGithub.add_Click({ Start-Process "https://github.com/RichTiTAN/Tor-Multiplexer" })
+$btnTelegram.add_Click({ Start-Process "https://t.me/itsTitanVPN" })
 
 $btnAutoStartTog.add_Click({ $script:autoStart = -not $script:autoStart; Set-WpfToggleState $btnAutoStartTog $script:autoStart; Save-Config })
 $btnAutoStartLbl.add_Click({ $btnAutoStartTog.RaiseEvent((New-Object System.Windows.RoutedEventArgs([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent))) })
@@ -939,40 +1111,20 @@ $btnBootLbl.add_Click({ $btnBootTog.RaiseEvent((New-Object System.Windows.Routed
 $btnDebugTog.add_Click({ $script:debugMode = -not $script:debugMode; Set-WpfToggleState $btnDebugTog $script:debugMode })
 $btnDebugLbl.add_Click({ $btnDebugTog.RaiseEvent((New-Object System.Windows.RoutedEventArgs([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent))) })
 
-# Advanced Menu Animation
 $script:isAdvancedOpen = $false
 $btnAdvTog.add_Click({
     $script:isAdvancedOpen = -not $script:isAdvancedOpen
-    $heightAnim = New-Object System.Windows.Media.Animation.DoubleAnimation
-    $heightAnim.Duration = [TimeSpan]::FromMilliseconds(300)
-    $fadeAnim = New-Object System.Windows.Media.Animation.DoubleAnimation
-    $fadeAnim.Duration = [TimeSpan]::FromMilliseconds(300)
-    $slideAnim = New-Object System.Windows.Media.Animation.DoubleAnimation
-    $slideAnim.Duration = [TimeSpan]::FromMilliseconds(300)
-
-    if ($script:isAdvancedOpen) {
-        $btnAdvTog.Content = "Hide"
-        $heightAnim.To = 445
-        $fadeAnim.To = 1
-        $slideAnim.To = 330
-        $AdvancedCanvas.Visibility = "Visible"
-    } else {
-        $btnAdvTog.Content = "Show"
-        $heightAnim.To = 295
-        $fadeAnim.To = 0
-        $slideAnim.To = 180
-        
-        $script:hideTimer = New-Object System.Windows.Threading.DispatcherTimer
-        $script:hideTimer.Interval = [TimeSpan]::FromMilliseconds(300)
-        $script:hideTimer.add_Tick({ $script:hideTimer.Stop(); $AdvancedCanvas.Visibility = "Hidden" })
-        $script:hideTimer.Start()
-    }
-    $form.BeginAnimation([System.Windows.Window]::HeightProperty, $heightAnim)
-    $AdvancedCanvas.BeginAnimation([System.Windows.Controls.Canvas]::OpacityProperty, $fadeAnim)
-    $SocksPanel.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty, $slideAnim)
-    $StatsPanel.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty, $slideAnim)
+    $btnAdvTog.Content = if ($script:isAdvancedOpen) { "Hide" } else { "Show" }
+    Update-WindowSize
 })
 $btnAdvLbl.add_Click({ $btnAdvTog.RaiseEvent((New-Object System.Windows.RoutedEventArgs([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent))) })
+
+$btnLogsTog.add_Click({
+    $script:isLogsOpen = -not $script:isLogsOpen
+    $btnLogsTog.Content = if ($script:isLogsOpen) { "Hide" } else { "Show" }
+    Update-WindowSize
+})
+$btnLogsLbl.add_Click({ $btnLogsTog.RaiseEvent((New-Object System.Windows.RoutedEventArgs([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent))) })
 
 $toggleAction = {
     param($mode); if ($global:lastXrayMode -ne $mode) {
@@ -992,7 +1144,6 @@ $form.add_Closed({ [Environment]::Exit(0) })
 $form.add_ContentRendered({ 
     if ($global:appInitialized) { return }
     $global:appInitialized = $true
-    
     Check-UpdateSilent 
 
     if (-not $global:hasVpnComponents -and $isFirstLaunch) {
@@ -1016,7 +1167,7 @@ $form.add_ContentRendered({
         $btnGit.Location = "15, 115"
         $btnGit.Size = "130, 30"
         $btnGit.BackColor = $colorBtnHex
-        $btnGit.ForeColor = $colorTextHex
+        $btnGit.Foreground = $colorTextHex
         $btnGit.FlatStyle = "Flat"
         $btnGit.FlatAppearance.BorderSize = 0
         $btnGit.TabStop = $false
@@ -1028,7 +1179,7 @@ $form.add_ContentRendered({
         $btnClose.Location = "220, 115"
         $btnClose.Size = "170, 30"
         $btnClose.BackColor = $colorBtnHex
-        $btnClose.ForeColor = $colorTextHex
+        $btnClose.Foreground = $colorTextHex
         $btnClose.FlatStyle = "Flat"
         $btnClose.FlatAppearance.BorderSize = 0
         $btnClose.TabStop = $false
