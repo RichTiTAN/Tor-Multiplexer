@@ -291,7 +291,7 @@ function Set-RoundedCorners($control, $radius) {
             <Button Name="btnLogsLbl" Canvas.Left="300" Canvas.Top="100" Width="180" Height="25" Content="Live Logs" Style="{StaticResource DarkButton}" Background="#2D3748" FontSize="11"/>
             <Button Name="btnLogsTog" Canvas.Left="485" Canvas.Top="100" Width="85" Height="25" Content="Show" Style="{StaticResource DarkButton}" FontSize="11"/>
 
-            <Button Name="btnDesktop" Canvas.Left="20" Canvas.Top="135" Width="260" Height="25" Content="Create Desktop Shortcut" Style="{StaticResource DarkButton}" FontSize="11"/>
+            <Button Name="btnDesktop" Canvas.Left="20" Canvas.Top="135" Width="260" Height="25" Content="Create Desktop Shortcut" Style="{StaticResource DarkButton}" Background="#2D3748" FontSize="11"/>
             
             <!-- Contact Box Group (Symmetrical & Scaled) -->
             <Border Canvas.Left="300" Canvas.Top="135" Width="270" Height="26" Background="#1A202C" BorderBrush="#2D3748" BorderThickness="1" CornerRadius="4">
