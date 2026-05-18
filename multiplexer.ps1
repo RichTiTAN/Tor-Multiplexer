@@ -28,20 +28,31 @@ if (-not ("Win32.WinInet" -as [type])) {
 }
 
 # --- VERSION CONTROL & GLOBALS ---
-$global:currentVersion = "4.7.5" 
+$global:currentVersion = "5.0.0" 
 $repoRawUrl = "https://raw.githubusercontent.com/RichTiTAN/Tor-Multiplexer/main/multiplexer.ps1"
-$global:forceManualUpdate = $false
+$global:forceManualUpdate = $true
 $global:abortBoot = $false
 $global:isConnected = $false
 $global:isEngineRunning = $false
 $global:cmdDebugPid = $null 
 $global:cmdDebugPid2 = $null 
+$global:xrayDohPid = $null
 $global:lastTotalBytes = 0
 $global:sessionDataBytes = 0
 $global:appInitialized = $false
 
 # Stats Smoothing Buffer
 $global:speedSamples = @(0,0,0,0,0)
+
+# Minimize to Tray Global Default
+$global:minimizeToTray = $false
+
+# Ad Blocker Global Default
+$global:enableAdBlock = $false
+
+# Split Tunneling Application & Blocklist Defaults
+$global:lastAppSplit = ""
+$global:lastBlockSplit = ""
 
 # --- CONFIGURATION & PATHS ---
 $cfgFile = "$global:baseDir\multiplexer_settings.json"
@@ -51,7 +62,11 @@ $sbDir   = "$global:baseDir\Data\sing_box"
 
 $autoStart = $true; $launchOnBoot = $false; $lastConfig = "Stable"; $lastBridge = "meek_lite"; $lastCount = "6"; $global:lastXrayMode = "Proxy Mode"; $global:lastManualSplit = ""; $global:enableDirect = $false; $global:customBridgeLine = ""; $global:v2rayChainJson = ""; $global:enableV2rayChain = $false
 $global:outboundProxyAddress = ""; $global:outboundProxyPort = ""; $global:outboundProxyType = "SOCKS5"; $global:enableOutboundProxy = $false
+$global:outboundProxyUser = ""; $global:outboundProxyPort = ""; $global:outboundProxyType = "SOCKS5"; $global:enableOutboundProxy = $false
 $global:outboundProxyUser = ""; $global:outboundProxyPass = ""; $global:enableOutboundAuth = $false
+$global:enableTorDoh = $false; $global:torDohUrl = "https://cloudflare-dns.com/dns-query"
+$global:enableUpstreamDoh = $false; $global:upstreamDohUrl = "https://cloudflare-dns.com/dns-query"
+$global:customExitCountry = "us"
 $isFirstLaunch = $true 
 
 if (Test-Path $cfgFile) {
@@ -60,13 +75,15 @@ if (Test-Path $cfgFile) {
         $s = Get-Content $cfgFile -Raw | ConvertFrom-Json
         if ($null -ne $s.AutoStart) { $autoStart = [bool]$s.AutoStart }
         if ($null -ne $s.LaunchOnBoot) { $launchOnBoot = [bool]$s.LaunchOnBoot }
-        if ($null -ne $s.LastConfig) { $lastConfig = if ($s.LastConfig -match "Fast") { "Fast" } else { "Stable" } }
+        if ($null -ne $s.LastConfig) { $lastConfig = if ($s.LastConfig -match "Fast") { "Fast" } elseif ($s.LastConfig -match "Custom") { "Custom" } else { "Stable" } }
         if ($null -ne $s.SelectedBridge) { $lastBridge = [string]$s.SelectedBridge }
         if ($null -ne $s.InstanceCount) { 
             $c = [int]$s.InstanceCount
             $lastCount = [string]$c
         }
         if ($null -ne $s.ManualSplit) { $global:lastManualSplit = [string]$s.ManualSplit }
+        if ($null -ne $s.AppSplit) { $global:lastAppSplit = [string]$s.AppSplit }
+        if ($null -ne $s.BlockSplit) { $global:lastBlockSplit = [string]$s.BlockSplit }
         if ($null -ne $s.EnableDirect) { $global:enableDirect = [bool]$s.EnableDirect }
         if ($null -ne $s.CustomBridgeLine) { $global:customBridgeLine = [string]$s.CustomBridgeLine }
         if ($null -ne $s.V2rayChainJson) { $global:v2rayChainJson = [string]$s.V2rayChainJson }
@@ -78,18 +95,19 @@ if (Test-Path $cfgFile) {
         if ($null -ne $s.OutboundProxyUser) { $global:outboundProxyUser = [string]$s.OutboundProxyUser }
         if ($null -ne $s.OutboundProxyPass) { $global:outboundProxyPass = [string]$s.OutboundProxyPass }
         if ($null -ne $s.EnableOutboundAuth) { $global:enableOutboundAuth = [bool]$s.EnableOutboundAuth }
-        if ($null -ne $s.XrayMode) { 
+        if ($null -ne $s.EnableTorDoh) { $global:enableTorDoh = [bool]$s.EnableTorDoh }
+        if ($null -ne $s.TorDohUrl) { $global:torDohUrl = [string]$s.TorDohUrl }
+        if ($null -ne $s.EnableUpstreamDoh) { $global:enableUpstreamDoh = [bool]$s.EnableUpstreamDoh }
+        if ($null -ne $s.UpstreamDohUrl) { $global:upstreamDohUrl = [string]$s.UpstreamDohUrl }
+        if ($null -ne $s.CustomExitCountry) { $global:customExitCountry = [string]$s.CustomExitCountry }
+        if ($null -ne $s.MinimizeToTray) { $global:minimizeToTray = [bool]$s.MinimizeToTray }
+        if ($null -ne $s.EnableAdBlock) { $global:enableAdBlock = [bool]$s.EnableAdBlock }
+        if ($null -ne $s.XrayMode) {
             if ($s.XrayMode -eq "Clear Proxy" -or $s.XrayMode -eq "None") { $global:lastXrayMode = "Clear Proxy" }
             elseif ($s.XrayMode -eq "VPN Mode") { $global:lastXrayMode = "VPN Mode" }
             else { $global:lastXrayMode = "Proxy Mode" }
         }
     } catch {}
-}
-
-$global:hasVpnComponents = $true
-if (-not (Test-Path "$sbDir\sing-box.exe")) {
-    $global:hasVpnComponents = $false
-    if ($global:lastXrayMode -eq "VPN Mode") { $global:lastXrayMode = "Proxy Mode" } 
 }
 
 $lanIp = "UNKNOWN"
@@ -122,7 +140,7 @@ function Set-RoundedCorners($control, $radius) {
 }
 
 # --- WPF XAML UI ---
-[xml]$xaml = @"
+$xaml = @"
 <Window 
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -237,88 +255,183 @@ function Set-RoundedCorners($control, $radius) {
         <Button Name="btnAdvLbl" Canvas.Left="20" Canvas.Top="130" Width="130" Height="25" Content="Advanced Settings" Style="{StaticResource DarkButton}" Background="#2D3748" FontSize="11"/>
         <Button Name="btnAdvTog" Canvas.Left="155" Canvas.Top="130" Width="70" Height="25" Content="Show" Style="{StaticResource DarkButton}" FontSize="11"/>
 
-        <Button Name="btnProxyMode" Canvas.Left="270" Canvas.Top="65" Width="98" Height="30" Content="Proxy Mode" Style="{StaticResource DarkButton}" Background="#4F7C9B" FontSize="11"/>
+        <Button Name="btnProxyMode" Canvas.Left="270" Canvas.Top="65" Width="98" Height="30" Content="Proxy Mode" Style="{StaticResource DarkButton}" Background="#4F7C9B" FontSize="11">
+            <Button.ToolTip><ToolTip Content="Enable a system-wide proxy that will route your apps through proxy." Background="#1A202C" Foreground="#E2E8F0" BorderBrush="#2D3748"/></Button.ToolTip>
+        </Button>
         
         <Button Name="btnVpnMode" Canvas.Left="371" Canvas.Top="65" Width="98" Height="30" Content="VPN Mode" Style="{StaticResource DarkButton}" FontSize="11">
             <Button.ToolTip>
-                <ToolTip Name="vpnToolTip" Visibility="Collapsed" Content="You need to download the full version from GitHub to use VPN Mode."/>
+                <ToolTip Name="vpnToolTip" Content="Route your entire system's network globally through the secure tunnel." Background="#1A202C" Foreground="#E2E8F0" BorderBrush="#2D3748"/>
             </Button.ToolTip>
         </Button>
         
-        <Button Name="btnClearProxy" Canvas.Left="472" Canvas.Top="65" Width="98" Height="30" Content="Clear Proxy" Style="{StaticResource DarkButton}" FontSize="11"/>
-
-        <Button Name="btnAction" Canvas.Left="270" Canvas.Top="100" Width="300" Height="55" Style="{StaticResource ActionButton}">
-            <StackPanel>
-                <TextBlock Name="btnActionMainText" Text="CONNECT" FontSize="18" FontWeight="Bold" HorizontalAlignment="Center"/>
-                <TextBlock Name="btnActionSubText" Text="(click to start)" FontSize="11" HorizontalAlignment="Center" Margin="0,2,0,0"/>
-            </StackPanel>
+        <Button Name="btnClearProxy" Canvas.Left="472" Canvas.Top="65" Width="98" Height="30" Content="Clear Proxy" Style="{StaticResource DarkButton}" FontSize="11">
+            <Button.ToolTip><ToolTip Content="Restore your normal Internet connection while having a proxy open on port 10818." Background="#1A202C" Foreground="#E2E8F0" BorderBrush="#2D3748"/></Button.ToolTip>
         </Button>
 
-        <Border Name="SocksPanel" Canvas.Left="20" Canvas.Top="180" Width="260" Height="65" Background="#2D3748" CornerRadius="4">
+        <Grid Canvas.Left="270" Canvas.Top="100" Width="300" Height="55">
+            <Grid.Clip>
+                <RectangleGeometry Rect="0,0,300,55" RadiusX="4" RadiusY="4"/>
+            </Grid.Clip>
+            <Border Background="#2D3748" CornerRadius="4" Width="300" Height="55"/>
+            <Canvas Width="300" Height="55" Background="Transparent" IsHitTestVisible="False">
+                <Path Name="wavePath1" Data="M 0,26 C 75,-4 75,56 150,26 C 225,-4 225,56 300,26 C 375,-4 375,56 450,26 C 525,-4 525,56 600,26 L 600,80 L 0,80 Z" Fill="#25718096" Height="80" Width="600" Canvas.Top="0">
+                    <Path.RenderTransform>
+                        <TranslateTransform x:Name="waveTrans1" X="0" Y="0"/>
+                    </Path.RenderTransform>
+                </Path>
+                <Path Name="wavePath2" Data="M 0,28 C 60,-2 90,58 150,28 C 210,-2 240,58 300,28 C 360,-2 390,58 450,28 C 510,-2 540,58 600,28 L 600,80 L 0,80 Z" Fill="#15718096" Height="80" Width="600" Canvas.Top="0">
+                    <Path.RenderTransform>
+                        <TranslateTransform x:Name="waveTrans2" X="-75" Y="0"/>
+                    </Path.RenderTransform>
+                </Path>
+            </Canvas>
+            <Button Name="btnAction" Width="300" Height="55" Style="{StaticResource ActionButton}" Background="Transparent">
+                <Grid Width="300" Height="55">
+                    <Grid.Effect>
+                        <DropShadowEffect Color="#000000" BlurRadius="15" ShadowDepth="1.0" Direction="270" Opacity="0.65"/>
+                    </Grid.Effect>
+                    <Grid.LayoutTransform>
+                        <TranslateTransform X="0" Y="0"/>
+                    </Grid.LayoutTransform>
+                    <TextBlock Name="btnActionMainText" Text="CONNECT" FontSize="18" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-5,0,0"/>
+                    <TextBlock Name="btnActionSubText" FontSize="10" FontFamily="Consolas" FontWeight="Bold" Foreground="#718096" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,3"/>
+                </Grid>
+            </Button>
+        </Grid>
+
+        <Border Name="UnifiedPanel" Canvas.Left="20" Canvas.Top="180" Width="550" Height="65" Background="#1A202C" BorderBrush="#2D3748" BorderThickness="1" CornerRadius="4">
             <Canvas>
                 <TextBlock Name="lblSocksTitle" Text="Mixed Port:" Canvas.Left="10" Canvas.Top="8" FontSize="11" Foreground="#A0AEC0"/>
                 <TextBlock Name="lblSocksDataIPs" Text="Waiting for connection..." Canvas.Left="10" Canvas.Top="26" FontSize="11" Foreground="#E2E8F0"/>
-                <TextBlock Name="lblSocksDataTags" Text="" Canvas.Right="10" Canvas.Top="26" FontSize="11" Foreground="#A0AEC0" TextAlignment="Right" Width="60"/>
+                <TextBlock Name="lblSocksDataTags" Text="" Canvas.Left="200" Canvas.Top="26" FontSize="11" Foreground="#A0AEC0" TextAlignment="Right" Width="60"/>
+
+                <Rectangle Canvas.Left="275" Canvas.Top="0" Width="1" Height="63" Fill="#2D3748"/>
+
+                <TextBlock Text="Stats:" Canvas.Left="285" Canvas.Top="8" FontSize="11" Foreground="#A0AEC0"/>
+                <TextBlock Name="lblStatsData" Text="Speed: 0 KB/s&#x0a;Total: 0 MB" Canvas.Left="285" Canvas.Top="26" FontSize="12" FontFamily="Consolas" Foreground="#68D391" FontWeight="Bold"/>
+                <TextBlock Name="lblGeoData" Text="Loc: --&#x0a;Ping: --" Canvas.Left="410" Canvas.Top="26" FontSize="12" FontFamily="Consolas" Foreground="#68D391" FontWeight="Bold"/>
+
+                <Button Name="btnStatsPanel" Canvas.Left="276" Canvas.Top="0" Width="272" Height="63" Cursor="Hand" ToolTip="Click to refresh routing tracker">
+                    <Button.Style>
+                        <Style TargetType="Button">
+                            <Setter Property="Background" Value="Transparent"/>
+                            <Setter Property="BorderThickness" Value="0"/>
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border Background="{TemplateBinding Background}" CornerRadius="0,3,3,0"/>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                            <Style.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter Property="Background" Value="#1AFFFFFF"/>
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
             </Canvas>
         </Border>
-        
-        <Border Name="StatsPanel" Canvas.Left="300" Canvas.Top="180" Width="270" Height="65" Background="#2D3748" CornerRadius="4">
-            <Canvas>
-                <TextBlock Name="lblStatsTitle" Text="Stats:" Canvas.Left="10" Canvas.Top="8" FontSize="11" Foreground="#A0AEC0"/>
-                <TextBlock Name="lblStatsData" Text="Speed: 0 KB/s&#x0a;Total: 0 MB" Canvas.Left="10" Canvas.Top="26" FontSize="12" FontFamily="Consolas" Foreground="#68D391" FontWeight="Bold"/>
-            </Canvas>
-        </Border>
 
-        <Canvas Name="AdvancedCanvas" Canvas.Left="0" Canvas.Top="180" Opacity="0" Visibility="Hidden">
-            <TextBlock Text="Advanced Options" Canvas.Left="20" Canvas.Top="0" Foreground="#A0AEC0" FontSize="11"/>
-            <Rectangle Canvas.Left="150" Canvas.Top="8" Width="420" Height="1" Fill="#3A3F44"/>
-
-            <Button Name="btnDirectConfig" Canvas.Left="20" Canvas.Top="30" Width="170" Height="25" Content="Split Tunneling" Style="{StaticResource DarkButton}" Background="#2D3748" FontSize="11"/>
-            <Button Name="btnDirectTog" Canvas.Left="195" Canvas.Top="30" Width="85" Height="25" Content="Disabled" Style="{StaticResource DarkButton}" Background="#8B4A4A" FontSize="11"/>
-            
-            <Button Name="btnV2rayConfig" Canvas.Left="300" Canvas.Top="30" Width="180" Height="25" Content="Custom v2ray Exit-Node" Style="{StaticResource DarkButton}" Background="#2D3748" FontSize="11"/>
-            <Button Name="btnV2rayTog" Canvas.Left="485" Canvas.Top="30" Width="85" Height="25" Content="Disabled" Style="{StaticResource DarkButton}" Background="#8B4A4A" FontSize="11"/>
-            
-            <Button Name="btnOutboundConfig" Canvas.Left="20" Canvas.Top="65" Width="170" Height="25" Content="Outbound Proxy" Style="{StaticResource DarkButton}" Background="#2D3748" FontSize="11"/>
-            <Button Name="btnOutboundTog" Canvas.Left="195" Canvas.Top="65" Width="85" Height="25" Content="Disabled" Style="{StaticResource DarkButton}" Background="#8B4A4A" FontSize="11"/>
-
-            <Button Name="btnBootLbl" Canvas.Left="300" Canvas.Top="65" Width="180" Height="25" Content="Launch on Start-up" Style="{StaticResource DarkButton}" Background="#2D3748" FontSize="11"/>
-            <Button Name="btnBootTog" Canvas.Left="485" Canvas.Top="65" Width="85" Height="25" Content="Disabled" Style="{StaticResource DarkButton}" Background="#8B4A4A" FontSize="11"/>
-
-            <Button Name="btnDebugLbl" Canvas.Left="20" Canvas.Top="100" Width="170" Height="25" Content="Debug Mode" Style="{StaticResource DarkButton}" Background="#2D3748" FontSize="11"/>
-            <Button Name="btnDebugTog" Canvas.Left="195" Canvas.Top="100" Width="85" Height="25" Content="Disabled" Style="{StaticResource DarkButton}" Background="#8B4A4A" FontSize="11"/>
-
-            <Button Name="btnLogsLbl" Canvas.Left="300" Canvas.Top="100" Width="180" Height="25" Content="Live Logs" Style="{StaticResource DarkButton}" Background="#2D3748" FontSize="11"/>
-            <Button Name="btnLogsTog" Canvas.Left="485" Canvas.Top="100" Width="85" Height="25" Content="Show" Style="{StaticResource DarkButton}" FontSize="11"/>
-
-            <Button Name="btnDesktop" Canvas.Left="20" Canvas.Top="135" Width="260" Height="25" Content="Create Desktop Shortcut" Style="{StaticResource DarkButton}" Background="#2D3748" FontSize="11"/>
-            
-            <!-- Contact Box Group (Symmetrical & Scaled) -->
-            <Border Canvas.Left="300" Canvas.Top="135" Width="270" Height="26" Background="#1A202C" BorderBrush="#2D3748" BorderThickness="1" CornerRadius="4">
+        <Canvas Name="AdvancedCanvas" Canvas.Left="0" Canvas.Top="155" Opacity="0" Visibility="Hidden">
+            <Border Background="#1A202C" BorderBrush="#2D3748" BorderThickness="1" CornerRadius="4" Canvas.Left="20" Canvas.Top="25" Width="550" Height="227">
                 <Canvas>
-                    <Border Background="#2D3748" Width="90" Height="24" CornerRadius="3,0,0,3">
-                        <TextBlock Text="Find Me On" Foreground="#A0AEC0" FontSize="11" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-1,0,0"/>
-                    </Border>
-                    <Button Name="btnGithub" Canvas.Left="90" Width="89" Height="24" Content="GitHub" Style="{StaticResource DarkButton}" Background="#1A202C" FontSize="11"/>
-                    <Rectangle Canvas.Left="179" Width="1" Height="24" Fill="#2D3748"/>
-                    <Button Name="btnTelegram" Canvas.Left="180" Width="88" Height="24" Content="Telegram" Style="{StaticResource DarkButton}" Background="#1A202C" FontSize="11"/>
+                    <Border Width="548" Height="26" Canvas.Left="0" Canvas.Top="0" Background="#121417" CornerRadius="3,3,0,0" BorderBrush="#2D3748" BorderThickness="0,0,0,1"/>
+                    
+                    <TextBlock Text="ROUTING" Canvas.Left="0" Canvas.Top="6" Width="275" TextAlignment="Center" FontSize="10" Foreground="#A0AEC0" FontWeight="Bold"/>
+                    <TextBlock Text="SYSTEM" Canvas.Left="275" Canvas.Top="6" Width="275" TextAlignment="Center" FontSize="10" Foreground="#A0AEC0" FontWeight="Bold"/>
+
+                    <Rectangle Canvas.Left="275" Canvas.Top="0" Width="1" Height="225" Fill="#2D3748"/>
+
+                    <Button Name="btnDirectConfig" Canvas.Left="15" Canvas.Top="44" Width="165" Height="25" Content="Split Tunneling" Style="{StaticResource DarkButton}" Background="#2D3748" FontSize="11">
+                        <Button.ToolTip><ToolTip Content="Bypass the proxy for specific websites or local IP addresses." Background="#1A202C" Foreground="#E2E8F0" BorderBrush="#2D3748"/></Button.ToolTip>
+                    </Button>
+                    <Button Name="btnDirectTog" Canvas.Left="185" Canvas.Top="44" Width="75" Height="25" Content="Disabled" Style="{StaticResource DarkButton}" Background="#8B4A4A" FontSize="11"/>
+                    
+                    <Button Name="btnBootLbl" Canvas.Left="290" Canvas.Top="44" Width="165" Height="25" Content="Launch on Start-up" Style="{StaticResource DarkButton}" Background="#2D3748" FontSize="11"/>
+                    <Button Name="btnBootTog" Canvas.Left="460" Canvas.Top="44" Width="75" Height="25" Content="Disabled" Style="{StaticResource DarkButton}" Background="#8B4A4A" FontSize="11"/>
+
+                    <Button Name="btnV2rayConfig" Canvas.Left="15" Canvas.Top="79" Width="165" Height="25" Content="Custom v2ray Exit-Node" Style="{StaticResource DarkButton}" Background="#2D3748" FontSize="11">
+                        <Button.ToolTip><ToolTip Content="Force your traffic to exit through a specific geographic country." Background="#1A202C" Foreground="#E2E8F0" BorderBrush="#2D3748"/></Button.ToolTip>
+                    </Button>
+                    <Button Name="btnV2rayTog" Canvas.Left="185" Canvas.Top="79" Width="75" Height="25" Content="Disabled" Style="{StaticResource DarkButton}" Background="#8B4A4A" FontSize="11"/>
+                    
+                    <Button Name="btnDebugLbl" Canvas.Left="290" Canvas.Top="79" Width="165" Height="25" Content="Debug Mode" Style="{StaticResource DarkButton}" Background="#2D3748" FontSize="11">
+                        <Button.ToolTip><ToolTip Content="Launch the background engines in visible console windows for troubleshooting." Background="#1A202C" Foreground="#E2E8F0" BorderBrush="#2D3748"/></Button.ToolTip>
+                    </Button>
+                    <Button Name="btnDebugTog" Canvas.Left="460" Canvas.Top="79" Width="75" Height="25" Content="Disabled" Style="{StaticResource DarkButton}" Background="#8B4A4A" FontSize="11"/>
+
+                    <Button Name="btnOutboundConfig" Canvas.Left="15" Canvas.Top="114" Width="165" Height="25" Content="Outbound Proxy" Style="{StaticResource DarkButton}" Background="#2D3748" FontSize="11">
+                        <Button.ToolTip><ToolTip Content="Route your Tor engines through an upstream SOCKS5/HTTPS proxy." Background="#1A202C" Foreground="#E2E8F0" BorderBrush="#2D3748"/></Button.ToolTip>
+                    </Button>
+                    <Button Name="btnOutboundTog" Canvas.Left="185" Canvas.Top="114" Width="75" Height="25" Content="Disabled" Style="{StaticResource DarkButton}" Background="#8B4A4A" FontSize="11"/>
+                    
+                    <Button Name="btnTrayLbl" Canvas.Left="290" Canvas.Top="114" Width="165" Height="25" Content="Minimize to Tray" Style="{StaticResource DarkButton}" Background="#2D3748" FontSize="11">
+                        <Button.ToolTip><ToolTip Content="Hide the application into the system tray when minimized." Background="#1A202C" Foreground="#E2E8F0" BorderBrush="#2D3748"/></Button.ToolTip>
+                    </Button>
+                    <Button Name="btnTrayTog" Canvas.Left="460" Canvas.Top="114" Width="75" Height="25" Content="Enabled" Style="{StaticResource DarkButton}" Background="#4E7A5E" FontSize="11"/>
+
+                    <Button Name="btnDohConfig" Canvas.Left="15" Canvas.Top="149" Width="165" Height="25" Content="DNS Settings" Style="{StaticResource DarkButton}" Background="#2D3748" FontSize="11">
+                        <Button.ToolTip><ToolTip Content="Encrypt your initial DNS queries to hide your traffic from your ISP." Background="#1A202C" Foreground="#E2E8F0" BorderBrush="#2D3748"/></Button.ToolTip>
+                    </Button>
+                    <Button Name="btnDohTog" Canvas.Left="185" Canvas.Top="149" Width="75" Height="25" Content="Disabled" Style="{StaticResource DarkButton}" Background="#8B4A4A" FontSize="11"/>
+                    
+                    <Button Name="btnLogsLbl" Canvas.Left="290" Canvas.Top="149" Width="165" Height="25" Content="Live Logs" Style="{StaticResource DarkButton}" Background="#2D3748" FontSize="11"/>
+                    <Button Name="btnLogsTog" Canvas.Left="460" Canvas.Top="149" Width="75" Height="25" Content="Show" Style="{StaticResource DarkButton}" FontSize="11"/>
+
+                    <Button Name="btnAdBlockLbl" Canvas.Left="15" Canvas.Top="184" Width="165" Height="25" Content="Ad &amp; Tracker Blocker" Style="{StaticResource DarkButton}" Background="#2D3748" FontSize="11">
+                        <Button.ToolTip><ToolTip Content="Block system-wide ads, trackers, and telemetry loops inside Xray." Background="#1A202C" Foreground="#E2E8F0" BorderBrush="#2D3748"/></Button.ToolTip>
+                    </Button>
+                    <Button Name="btnAdBlockTog" Canvas.Left="185" Canvas.Top="184" Width="75" Height="25" Content="Disabled" Style="{StaticResource DarkButton}" Background="#8B4A4A" FontSize="11"/>
+
+                    <Button Name="btnDesktop" Canvas.Left="290" Canvas.Top="184" Width="245" Height="25" Content="Create Desktop Shortcut" Style="{StaticResource DarkButton}" Background="#2D3748" FontSize="11"/>
+                    
+                    <StackPanel Visibility="Collapsed" IsEnabled="False">
+                        <Button Name="btnGithub"/>
+                        <Button Name="btnTelegram"/>
+                    </StackPanel>
                 </Canvas>
             </Border>
         </Canvas>
 
-        <!-- LIVE LOGS PANEL -->
         <Canvas Name="LogsCanvas" Canvas.Left="585" Canvas.Top="20" Width="300" Height="225" Visibility="Hidden" Opacity="0">
             <Border Name="logBorder" Background="#121417" Width="300" Height="225" CornerRadius="4" BorderBrush="#2D3748" BorderThickness="1">
                 <Canvas>
                     <TextBlock Text="TOR BOOTSTRAP STATUS" Canvas.Left="15" Canvas.Top="10" Foreground="#A0AEC0" FontSize="10" FontWeight="Bold"/>
                     
-                    <!-- Left Column -->
+                    <Button Name="btnCloseLogs" Canvas.Left="272" Canvas.Top="6" Width="22" Height="22" Content="✕" FontSize="10" FontWeight="Bold" Padding="0,-1,0,0">
+                        <Button.Style>
+                            <Style TargetType="Button">
+                                <Setter Property="Background" Value="Transparent"/>
+                                <Setter Property="Foreground" Value="#4A5568"/>
+                                <Setter Property="BorderThickness" Value="0"/>
+                                <Setter Property="Cursor" Value="Hand"/>
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="Button">
+                                            <Border Background="{TemplateBinding Background}" CornerRadius="3">
+                                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" Margin="{TemplateBinding Padding}"/>
+                                            </Border>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                                <Style.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter Property="Background" Value="#8B4A4A"/>
+                                        <Setter Property="Foreground" Value="#E2E8F0"/>
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                    
                     <TextBlock Name="lblTor1" Text="Tor 01: Offline" Canvas.Left="15" Canvas.Top="30" Foreground="#4A5568" FontSize="12" FontFamily="Consolas"/>
                     <TextBlock Name="lblTor2" Text="Tor 02: Offline" Canvas.Left="15" Canvas.Top="48" Foreground="#4A5568" FontSize="12" FontFamily="Consolas"/>
                     <TextBlock Name="lblTor3" Text="Tor 03: Offline" Canvas.Left="15" Canvas.Top="66" Foreground="#4A5568" FontSize="12" FontFamily="Consolas"/>
                     <TextBlock Name="lblTor4" Text="Tor 04: Offline" Canvas.Left="15" Canvas.Top="84" Foreground="#4A5568" FontSize="12" FontFamily="Consolas"/>
                     
-                    <!-- Right Column -->
                     <TextBlock Name="lblTor5" Text="Tor 05: Offline" Canvas.Left="155" Canvas.Top="30" Foreground="#4A5568" FontSize="12" FontFamily="Consolas"/>
                     <TextBlock Name="lblTor6" Text="Tor 06: Offline" Canvas.Left="155" Canvas.Top="48" Foreground="#4A5568" FontSize="12" FontFamily="Consolas"/>
                     <TextBlock Name="lblTor7" Text="Tor 07: Offline" Canvas.Left="155" Canvas.Top="66" Foreground="#4A5568" FontSize="12" FontFamily="Consolas"/>
@@ -337,8 +450,20 @@ function Set-RoundedCorners($control, $radius) {
 </Window>
 "@
 
-$reader = (New-Object System.Xml.XmlNodeReader $xaml)
-$form = [Windows.Markup.XamlReader]::Load($reader)
+# --- INTERFACE LAUNCH COMPILER ---
+try {
+    $form = [Windows.Markup.XamlReader]::Parse($xaml)
+    
+    if (Test-Path "$global:baseDir\icon.ico") { $form.Icon = [System.Windows.Media.Imaging.BitmapFrame]::Create([uri]"$global:baseDir\icon.ico") }
+    
+} catch {
+    $errMsg = $_.Exception.Message
+    if ($_.Exception.InnerException) {
+        $errMsg += "`n`nInner Details: " + $_.Exception.InnerException.Message
+    }
+    [System.Windows.Forms.MessageBox]::Show("App failed to compile the layout window.`n`nError: $errMsg", "Launch Crash Debugger", 0, 16)
+    [Environment]::Exit(0)
+}
 
 # --- MAP WPF ELEMENTS TO POWERSHELL ---
 $comboBridge = $form.FindName("comboBridge")
@@ -347,6 +472,10 @@ $comboCount = $form.FindName("comboCount")
 $btnAction = $form.FindName("btnAction")
 $btnActionMainText = $form.FindName("btnActionMainText")
 $btnActionSubText = $form.FindName("btnActionSubText")
+$wavePath1 = $form.FindName("wavePath1")
+$wavePath2 = $form.FindName("wavePath2")
+$waveTrans1 = $form.FindName("waveTrans1")
+$waveTrans2 = $form.FindName("waveTrans2")
 $btnProxyMode = $form.FindName("btnProxyMode")
 $btnVpnMode = $form.FindName("btnVpnMode")
 $vpnToolTip = $form.FindName("vpnToolTip")
@@ -368,6 +497,8 @@ $btnDebugLbl = $form.FindName("btnDebugLbl")
 $btnDebugTog = $form.FindName("btnDebugTog")
 $btnLogsLbl = $form.FindName("btnLogsLbl")
 $btnLogsTog = $form.FindName("btnLogsTog")
+$btnDohConfig = $form.FindName("btnDohConfig")
+$btnDohTog = $form.FindName("btnDohTog")
 $btnDesktop = $form.FindName("btnDesktop")
 $btnGithub = $form.FindName("btnGithub")
 $btnTelegram = $form.FindName("btnTelegram")
@@ -375,13 +506,19 @@ $AdvancedCanvas = $form.FindName("AdvancedCanvas")
 $LogsCanvas = $form.FindName("LogsCanvas")
 $logBorder = $form.FindName("logBorder")
 $txtXrayLogs = $form.FindName("txtXrayLogs")
-$SocksPanel = $form.FindName("SocksPanel")
-$StatsPanel = $form.FindName("StatsPanel")
+$btnCloseLogs = $form.FindName("btnCloseLogs")
+$UnifiedPanel = $form.FindName("UnifiedPanel")
 $lblSocksTitle = $form.FindName("lblSocksTitle")
 $lblSocksDataIPs = $form.FindName("lblSocksDataIPs")
 $lblSocksDataTags = $form.FindName("lblSocksDataTags")
 $lblStatsTitle = $form.FindName("lblStatsTitle")
 $lblStatsData = $form.FindName("lblStatsData")
+$lblGeoData = $form.FindName("lblGeoData")
+$btnStatsPanel = $form.FindName("btnStatsPanel")
+$btnTrayLbl = $form.FindName("btnTrayLbl")
+$btnTrayTog = $form.FindName("btnTrayTog")
+$btnAdBlockLbl = $form.FindName("btnAdBlockLbl")
+$btnAdBlockTog = $form.FindName("btnAdBlockTog")
 
 function Add-ComboItem($combo, $text, $tag) {
     $cbi = New-Object System.Windows.Controls.ComboBoxItem
@@ -397,6 +534,7 @@ Add-ComboItem $comboBridge "Custom" "Custom"
 
 Add-ComboItem $comboConfig "Stable" "Stable"
 Add-ComboItem $comboConfig "Fast" "Fast"
+Add-ComboItem $comboConfig "Custom" "Custom"
 
 Add-ComboItem $comboCount "1" "1"
 Add-ComboItem $comboCount "2" "2"
@@ -417,6 +555,7 @@ Set-ComboSelectedTag $comboBridge $lastBridge
 Set-ComboSelectedTag $comboConfig $lastConfig
 Set-ComboSelectedTag $comboCount $lastCount
 if ($null -ne $comboBridge.SelectedItem) { $global:previousBridge = $comboBridge.SelectedItem.Tag } else { $global:previousBridge = "meek_lite" }
+if ($null -ne $comboConfig.SelectedItem) { $global:previousConfig = $comboConfig.SelectedItem.Tag } else { $global:previousConfig = "Stable" }
 
 # --- WPF HELPER FUNCTIONS ---
 function DoEvents {
@@ -435,35 +574,39 @@ Set-WpfToggleState $btnAutoStartTog $autoStart
 Set-WpfToggleState $btnDirectTog $global:enableDirect
 Set-WpfToggleState $btnV2rayTog $global:enableV2rayChain
 Set-WpfToggleState $btnOutboundTog $global:enableOutboundProxy
+Set-WpfToggleState $btnDohTog ($global:enableTorDoh -or $global:enableUpstreamDoh)
 Set-WpfToggleState $btnBootTog $launchOnBoot
 $script:debugMode = $false
 Set-WpfToggleState $btnDebugTog $script:debugMode
+Set-WpfToggleState $btnTrayTog $global:minimizeToTray
+Set-WpfToggleState $btnAdBlockTog $global:enableAdBlock
 
 function Update-RoutingToggle {
     $btnProxyMode.Background = $brushInactiveRouting; $btnProxyMode.Foreground = "#A0AEC0"
     $btnClearProxy.Background = $brushInactiveRouting; $btnClearProxy.Foreground = "#A0AEC0"
-    if (-not $global:hasVpnComponents) { 
-        $btnVpnMode.Background = $brushDisabledVpn; $btnVpnMode.Foreground = "#4A5568"
-        $btnVpnMode.Cursor = [System.Windows.Input.Cursors]::No
-        $vpnToolTip.Visibility = "Visible"
-    } else { 
-        $btnVpnMode.Background = $brushInactiveRouting; $btnVpnMode.Foreground = "#A0AEC0"
-        $btnVpnMode.Cursor = [System.Windows.Input.Cursors]::Hand
-        $vpnToolTip.Visibility = "Collapsed"
-    }
-    if ($global:lastXrayMode -eq "Proxy Mode") { $btnProxyMode.Background = $brushActiveRouting; $btnProxyMode.Foreground = "#FFFFFF" } elseif ($global:lastXrayMode -eq "VPN Mode" -and $global:hasVpnComponents) { $btnVpnMode.Background = $brushActiveRouting; $btnVpnMode.Foreground = "#FFFFFF" } elseif ($global:lastXrayMode -eq "Clear Proxy") { $btnClearProxy.Background = $brushActiveRouting; $btnClearProxy.Foreground = "#FFFFFF" }
+    
+    $btnVpnMode.Background = $brushInactiveRouting; $btnVpnMode.Foreground = "#A0AEC0"
+    $btnVpnMode.Cursor = [System.Windows.Input.Cursors]::Hand
+    $vpnToolTip.Content = "Route your entire system's network globally through the secure tunnel."
+    $vpnToolTip.Visibility = "Visible" 
 
-    if ($global:lastXrayMode -eq "VPN Mode" -and $global:hasVpnComponents) {
-        $global:enableDirect = $false
-        Set-WpfToggleState $btnDirectTog $false
-        $btnDirectConfig.IsEnabled = $false; $btnDirectConfig.Opacity = 0.5
-        $btnDirectTog.IsEnabled = $false; $btnDirectTog.Opacity = 0.5
-    } else {
-        $btnDirectConfig.IsEnabled = $true; $btnDirectConfig.Opacity = 1.0
-        $btnDirectTog.IsEnabled = $true; $btnDirectTog.Opacity = 1.0
-    }
+    if ($global:lastXrayMode -eq "Proxy Mode") { $btnProxyMode.Background = $brushActiveRouting; $btnProxyMode.Foreground = "#FFFFFF" } elseif ($global:lastXrayMode -eq "VPN Mode") { $btnVpnMode.Background = $brushActiveRouting; $btnVpnMode.Foreground = "#FFFFFF" } elseif ($global:lastXrayMode -eq "Clear Proxy") { $btnClearProxy.Background = $brushActiveRouting; $btnClearProxy.Foreground = "#FFFFFF" }
+
+    $btnDirectConfig.IsEnabled = $true; $btnDirectConfig.Opacity = 1.0
+    $btnDirectTog.IsEnabled = $true; $btnDirectTog.Opacity = 1.0
 }
 Update-RoutingToggle
+
+function Evaluate-ProxyExclusivity {
+    if ($global:enableTorDoh) {
+        $btnOutboundConfig.IsEnabled = $false; $btnOutboundConfig.Opacity = 0.5
+        $btnOutboundTog.IsEnabled = $false; $btnOutboundTog.Opacity = 0.5
+    } else {
+        $btnOutboundConfig.IsEnabled = $true; $btnOutboundConfig.Opacity = 1.0
+        $btnOutboundTog.IsEnabled = $true; $btnOutboundTog.Opacity = 1.0
+    }
+}
+Evaluate-ProxyExclusivity
 
 # --- SAFE RELATIVE BRIDGE DATABASE ---
 $bridgeData = @{
@@ -472,140 +615,912 @@ $bridgeData = @{
     "snowflake" = @{ "plugin" = "ClientTransportPlugin snowflake exec ..\..\PluggableTransports\lyrebird.exe"; "lines" = @("Bridge snowflake 192.0.2.3:80 2B280B23E1107BB62ABFC40DDCC8824814F80A72 fingerprint=2B280B23E1107BB62ABFC40DDCC8824814F80A72 url=https://1098762253.rsc.cdn77.org/ fronts=app.datapacket.com,www.datapacket.com ice=stun:stun.epygi.com:3478,stun:stun.uls.co.za:3478,stun:stun.voipgate.com:3478,stun:stun.mixvoip.com:3478,stun:stun.telnyx.com:3478,stun:stun.hot-chilli.net:3478,stun:stun.fitauto.ru:3478,stun:stun.m-online.net:3478 utls-imitate=hellorandomizedalpn", "Bridge snowflake 192.0.2.4:80 8838024498816A039FCBBAB14E6F40A0843051FA fingerprint=8838024498816A039FCBBAB14E6F40A0843051FA url=https://1098762253.rsc.cdn77.org/ fronts=app.datapacket.com,www.datapacket.com ice=stun:stun.epygi.com:3478,stun:stun.uls.co.za:3478,stun:stun.voipgate.com:3478,stun:stun.mixvoip.com:3478,stun:stun.telnyx.com:3478,stun:stun.hot-chilli.net:3478,stun:stun.fitauto.ru:3478,stun:stun.m-online.net:3478 utls-imitate=hellorandomizedalpn") }
 }
 
-# --- OLD WINFORMS MODALS ---
+# --- POP UP WINDOWS ---
 function Show-DirectRulesDialog {
-    $dlg = New-Object Windows.Forms.Form; $dlg.Text = "Split Tunneling Rules"; $dlg.Size = New-Object Drawing.Size(420, 230); $dlg.StartPosition = "CenterParent"; $dlg.BackColor = $colorBgHex; $dlg.FormBorderStyle = "FixedDialog"; $dlg.MaximizeBox = $false
-    $lbl = New-Object Windows.Forms.Label; $lbl.Text = "Enter Domains or IPs to bypass Tor (comma separated):"; $lbl.ForeColor = $colorTextHex; $lbl.Location = "15,15"; $lbl.AutoSize = $true
+    $xaml = @"
+    <Window 
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Split Tunneling &amp; Privacy Rules" Height="400" Width="480" 
+        WindowStartupLocation="CenterOwner" Background="#1A1A1B" Foreground="#E2E8F0"
+        ResizeMode="NoResize" FontFamily="Segoe UI" ShowInTaskbar="False">
+        <Window.Resources>
+            <Style TargetType="Button">
+                <Setter Property="Background" Value="#3A3F44"/>
+                <Setter Property="Foreground" Value="#E2E8F0"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border Background="{TemplateBinding Background}" CornerRadius="4">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+                <Style.Triggers>
+                    <Trigger Property="IsMouseOver" Value="True">
+                        <Setter Property="Background" Value="#4A5568"/>
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+        </Window.Resources>
+        <Canvas>
+            <Border Canvas.Left="12" Canvas.Top="12" Width="440" Height="335" Background="#121417" CornerRadius="4" BorderBrush="#2D3748" BorderThickness="1">
+                <Canvas>
+                    <TextBlock Name="lblTitle" Text="SPLIT TUNNELING &amp; PRIVACY ENGINE" Canvas.Left="15" Canvas.Top="12" FontSize="10" Foreground="#A0AEC0" FontWeight="Bold"/>
+                    
+                    <TextBlock Name="lblDomains" Text="Domains or IPs to bypass Tor (Comma Separated | Proxy Mode):" Canvas.Left="15" Canvas.Top="35" FontSize="11" Foreground="#E2E8F0"/>
+                    <TextBox Name="txtDomains" Canvas.Left="15" Canvas.Top="55" Width="410" Height="45" 
+                             Background="#0A0C0F" Foreground="#68D391" BorderBrush="#2D3748" BorderThickness="1" 
+                             TextWrapping="Wrap" Padding="5" FontSize="11" FontFamily="Consolas"/>
+                             
+                    <TextBlock Name="lblApps" Text="Applications to bypass VPN Tunnel (e.g., spotify.exe | VPN Mode):" Canvas.Left="15" Canvas.Top="115" FontSize="11" Foreground="#E2E8F0"/>
+                    <TextBox Name="txtApps" Canvas.Left="15" Canvas.Top="135" Width="410" Height="45" 
+                             Background="#0A0C0F" Foreground="#68D391" BorderBrush="#2D3748" BorderThickness="1" 
+                             TextWrapping="Wrap" Padding="5" FontSize="11" FontFamily="Consolas"/>
+
+                    <TextBlock Name="lblBlock" Text="Custom Blacklisted Domains to Block Completely (e.g., tiktok.com):" Canvas.Left="15" Canvas.Top="195" FontSize="11" Foreground="#E2E8F0"/>
+                    <TextBox Name="txtBlock" Canvas.Left="15" Canvas.Top="215" Width="410" Height="45" 
+                             Background="#0A0C0F" Foreground="#68D391" BorderBrush="#2D3748" BorderThickness="1" 
+                             TextWrapping="Wrap" Padding="5" FontSize="11" FontFamily="Consolas"/>
+                             
+                    <Button Name="btnOk" Content="Save Config" Canvas.Left="235" Canvas.Top="290" Width="90" Height="25" IsDefault="True">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                <Setter Property="Background" Value="#4E7A5E"/>
+                                <Style.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter Property="Background" Value="#5F9774"/>
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                    
+                    <Button Name="btnCancel" Content="Cancel" Canvas.Left="335" Canvas.Top="290" Width="90" Height="25" IsCancel="True"/>
+                </Canvas>
+            </Border>
+        </Canvas>
+    </Window>
+"@
+    $dlg = [Windows.Markup.XamlReader]::Parse($xaml)
+    $dlg.Owner = $form
+
+    $txtDomains = $dlg.FindName("txtDomains")
+    $txtApps = $dlg.FindName("txtApps")
+    $txtBlock = $dlg.FindName("txtBlock")
+    $lblDomains = $dlg.FindName("lblDomains")
+    $btnOk = $dlg.FindName("btnOk")
     
-    $txt = New-Object Windows.Forms.TextBox; $txt.Location = "15,40"; $txt.Size = "375, 80"; $txt.Multiline = $true; $txt.ScrollBars = "Vertical"; $txt.BackColor = "#2D3748"; $txt.ForeColor = "White"; $txt.Text = $global:lastManualSplit; $txt.BorderStyle = "None"; $txt.Font = New-Object System.Drawing.Font("Segoe UI", 11)
+    $txtDomains.Text = $global:lastManualSplit
+    $txtApps.Text = $global:lastAppSplit
+    $txtBlock.Text = $global:lastBlockSplit
+
+    if ($global:lastXrayMode -eq "VPN Mode") {
+        $txtDomains.IsEnabled = $false
+        $txtDomains.Background = [System.Windows.Media.Brushes]::Transparent
+        $txtDomains.Opacity = 0.3
+        $lblDomains.Text = "Domains & IPs (Disabled in VPN Mode - Use App Bypass below)"
+        $lblDomains.Opacity = 0.5
+    }
+
+    $btnOk.Add_Click({
+        $dlg.DialogResult = $true
+        $dlg.Close()
+    })
     
-    $btnOk = New-Object Windows.Forms.Button; $btnOk.Text = "Save"; $btnOk.Location = "300, 140"; $btnOk.Size = "90,30"; $btnOk.DialogResult = "OK"; $btnOk.BackColor = $colorBtnHex; $btnOk.ForeColor = $colorTextHex; $btnOk.FlatStyle = "Flat"; $btnOk.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnOk 4; $btnOk.TabStop = $false
-    $dlg.Controls.AddRange(@($lbl, $txt, $btnOk)); $dlg.AcceptButton = $btnOk
-    
-    $dlg.Add_Shown({ $dlg.ActiveControl = $lbl }) 
-    if ($dlg.ShowDialog() -eq "OK") { $global:lastManualSplit = $txt.Text.Trim(); return $true }
-    $dlg.Dispose(); return $false
+    $dlg.Add_Loaded({
+        if ($global:lastXrayMode -eq "VPN Mode") { $txtApps.Focus() | Out-Null } else { $txtDomains.Focus() | Out-Null }
+    })
+
+    if ($dlg.ShowDialog() -eq $true) { 
+        $global:lastManualSplit = $txtDomains.Text.Trim()
+        $global:lastAppSplit = $txtApps.Text.Trim()
+        $global:lastBlockSplit = $txtBlock.Text.Trim()
+        return $true 
+    }
+    return $false
 }
+
 function Show-CustomBridgeDialog {
-    $dlg = New-Object Windows.Forms.Form; $dlg.Text = "Custom Bridge Configuration"; $dlg.Size = New-Object Drawing.Size(420, 230); $dlg.StartPosition = "CenterParent"; $dlg.BackColor = $colorBgHex; $dlg.FormBorderStyle = "FixedDialog"; $dlg.MaximizeBox = $false
-    $lbl = New-Object Windows.Forms.Label; $lbl.Text = "Paste your custom bridge configurations here:"; $lbl.ForeColor = $colorTextHex; $lbl.Location = "15,15"; $lbl.AutoSize = $true
+    $xaml = @"
+    <Window 
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Custom Bridge Configuration" Height="240" Width="420"
+        WindowStartupLocation="CenterOwner" Background="#1A1A1B" Foreground="#E2E8F0"
+        ResizeMode="NoResize" FontFamily="Segoe UI" ShowInTaskbar="False">
+        <Window.Resources>
+            <Style TargetType="Button">
+                <Setter Property="Background" Value="#3A3F44"/>
+                <Setter Property="Foreground" Value="#E2E8F0"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border Background="{TemplateBinding Background}" CornerRadius="4">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+                <Style.Triggers>
+                    <Trigger Property="IsMouseOver" Value="True">
+                        <Setter Property="Background" Value="#4A5568"/>
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+        </Window.Resources>
+        <Canvas>
+            <Border Canvas.Left="12" Canvas.Top="12" Width="380" Height="174" Background="#121417" CornerRadius="4" BorderBrush="#2D3748" BorderThickness="1">
+                <Canvas>
+                    <TextBlock Text="CUSTOM BRIDGE CONFIGURATIONS" Canvas.Left="15" Canvas.Top="12" FontSize="10" Foreground="#A0AEC0" FontWeight="Bold"/>
+                    
+                    <TextBox Name="txtInput" Canvas.Left="15" Canvas.Top="35" Width="350" Height="80" 
+                             Background="#0A0C0F" Foreground="#68D391" BorderBrush="#2D3748" BorderThickness="1" 
+                             TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" Padding="5" FontSize="11" FontFamily="Consolas"/>
+                             
+                    <Button Name="btnOk" Content="Save" Canvas.Left="175" Canvas.Top="132" Width="90" Height="25" IsDefault="True">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                <Setter Property="Background" Value="#4E7A5E"/>
+                                <Style.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter Property="Background" Value="#5F9774"/>
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                    
+                    <Button Name="btnCancel" Content="Cancel" Canvas.Left="275" Canvas.Top="132" Width="90" Height="25" IsCancel="True"/>
+                </Canvas>
+            </Border>
+        </Canvas>
+    </Window>
+"@
+    $dlg = [Windows.Markup.XamlReader]::Parse($xaml)
     
-    $txt = New-Object Windows.Forms.TextBox; $txt.Location = "15,40"; $txt.Size = "375, 80"; $txt.Multiline = $true; $txt.ScrollBars = "Vertical"; $txt.BackColor = "#2D3748"; $txt.ForeColor = "White"; $txt.Text = $global:customBridgeLine; $txt.BorderStyle = "None"; $txt.Font = New-Object System.Drawing.Font("Segoe UI", 11)
+    $dlg.Owner = $form
+
+    $txtInput = $dlg.FindName("txtInput")
+    $btnOk = $dlg.FindName("btnOk")
     
-    $btnOk = New-Object Windows.Forms.Button; $btnOk.Text = "Save"; $btnOk.Location = "210, 140"; $btnOk.Size = "80,30"; $btnOk.DialogResult = "OK"; $btnOk.BackColor = $colorBtnHex; $btnOk.ForeColor = $colorTextHex; $btnOk.FlatStyle = "Flat"; $btnOk.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnOk 4; $btnOk.TabStop = $false
-    $btnCancel = New-Object Windows.Forms.Button; $btnCancel.Text = "Cancel"; $btnCancel.Location = "300, 140"; $btnCancel.Size = "90,30"; $btnCancel.DialogResult = "Cancel"; $btnCancel.BackColor = $colorBtnHex; $btnCancel.ForeColor = $colorTextHex; $btnCancel.FlatStyle = "Flat"; $btnCancel.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnCancel 4; $btnCancel.TabStop = $false
-    $dlg.Controls.AddRange(@($lbl, $txt, $btnOk, $btnCancel)); $dlg.AcceptButton = $btnOk; $dlg.CancelButton = $btnCancel
+    $txtInput.Text = $global:customBridgeLine
+
+    $btnOk.Add_Click({
+        $dlg.DialogResult = $true
+        $dlg.Close()
+    })
     
-    $dlg.Add_Shown({ $dlg.ActiveControl = $lbl }) 
-    if ($dlg.ShowDialog() -eq "OK") { $global:customBridgeLine = $txt.Text.Trim(); return $true }
-    $dlg.Dispose(); return $false
+    $dlg.Add_Loaded({
+        $txtInput.Focus() | Out-Null
+        $txtInput.CaretIndex = $txtInput.Text.Length
+    })
+
+    if ($dlg.ShowDialog() -eq $true) { 
+        $global:customBridgeLine = $txtInput.Text.Trim()
+        return $true 
+    }
+    return $false
 }
 function Show-V2rayDialog {
-    $dlg = New-Object Windows.Forms.Form; $dlg.Text = "V2Ray Outbound Chain Configuration"; $dlg.Size = New-Object Drawing.Size(520, 360); $dlg.StartPosition = "CenterParent"; $dlg.BackColor = $colorBgHex; $dlg.FormBorderStyle = "FixedDialog"; $dlg.MaximizeBox = $false
-    $lbl = New-Object Windows.Forms.Label; $lbl.Text = "Paste the full v2rayN JSON or raw Xray Outbound below:"; $lbl.ForeColor = $colorTextHex; $lbl.Location = "15,15"; $lbl.AutoSize = $true
+    $xaml = @"
+    <Window 
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="V2Ray Outbound Chain Configuration" Height="365" Width="520" 
+        WindowStartupLocation="CenterOwner" Background="#1A1A1B" Foreground="#E2E8F0"
+        ResizeMode="NoResize" FontFamily="Segoe UI" ShowInTaskbar="False">
+        <Window.Resources>
+            <Style TargetType="Button">
+                <Setter Property="Background" Value="#3A3F44"/>
+                <Setter Property="Foreground" Value="#E2E8F0"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border Background="{TemplateBinding Background}" CornerRadius="4">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+                <Style.Triggers>
+                    <Trigger Property="IsMouseOver" Value="True">
+                        <Setter Property="Background" Value="#4A5568"/>
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+        </Window.Resources>
+        <Canvas>
+            <Border Canvas.Left="12" Canvas.Top="12" Width="480" Height="299" Background="#121417" CornerRadius="4" BorderBrush="#2D3748" BorderThickness="1">
+                <Canvas>
+                    <TextBlock Text="V2RAY OUTBOUND CHAIN CONFIGURATION" Canvas.Left="15" Canvas.Top="12" FontSize="10" Foreground="#A0AEC0" FontWeight="Bold"/>
+                    <TextBlock Text="Paste the full v2rayN JSON or raw Xray Outbound below:" Canvas.Left="15" Canvas.Top="35" FontSize="11" Foreground="#E2E8F0"/>
+                    
+                    <TextBox Name="txtInput" Canvas.Left="15" Canvas.Top="60" Width="448" Height="180" 
+                             Background="#0A0C0F" Foreground="#68D391" BorderBrush="#2D3748" BorderThickness="1" 
+                             TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" Padding="5" FontSize="11" FontFamily="Consolas"/>
+                             
+                    <Button Name="btnImport" Content="Import .json File" Canvas.Left="15" Canvas.Top="257" Width="120" Height="25"/>
+                    
+                    <Button Name="btnOk" Content="Validate &amp; Save" Canvas.Left="243" Canvas.Top="257" Width="110" Height="25" IsDefault="True">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                <Setter Property="Background" Value="#4E7A5E"/>
+                                <Style.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter Property="Background" Value="#5F9774"/>
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                    
+                    <Button Name="btnCancel" Content="Cancel" Canvas.Left="363" Canvas.Top="257" Width="100" Height="25" IsCancel="True"/>
+                </Canvas>
+            </Border>
+        </Canvas>
+    </Window>
+"@
+    $dlg = [Windows.Markup.XamlReader]::Parse($xaml)
     
-    $txt = New-Object Windows.Forms.TextBox; $txt.Location = "15,40"; $txt.Size = "475, 210"; $txt.Multiline = $true; $txt.ScrollBars = "Vertical"; $txt.BackColor = "#2D3748"; $txt.ForeColor = "White"; $txt.Text = $global:v2rayChainJson; $txt.BorderStyle = "None"; $txt.Font = New-Object System.Drawing.Font("Segoe UI", 11)
+    $dlg.Owner = $form
+
+    $txtInput = $dlg.FindName("txtInput")
+    $btnImport = $dlg.FindName("btnImport")
+    $btnOk = $dlg.FindName("btnOk")
     
-    $btnImport = New-Object Windows.Forms.Button; $btnImport.Text = "Import .json File"; $btnImport.Location = "15, 265"; $btnImport.Size="120, 30"; $btnImport.BackColor = $colorBtnHex; $btnImport.ForeColor = $colorTextHex; $btnImport.FlatStyle = "Flat"; $btnImport.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnImport 4; $btnImport.TabStop = $false
+    $txtInput.Text = $global:v2rayChainJson
+
     $btnImport.Add_Click({
-        $fd = New-Object System.Windows.Forms.OpenFileDialog; $fd.Filter = "JSON Files (*.json)|*.json|All Files (*.*)|*.*"
-        if ($fd.ShowDialog() -eq "OK") { $txt.Text = Get-Content $fd.FileName -Raw }
+        $fd = New-Object System.Windows.Forms.OpenFileDialog
+        $fd.Filter = "JSON Files (*.json)|*.json|All Files (*.*)|*.*"
+        if ($fd.ShowDialog() -eq "OK") { $txtInput.Text = Get-Content $fd.FileName -Raw }
     })
-    $btnOk = New-Object Windows.Forms.Button; $btnOk.Text = "Validate & Save"; $btnOk.Location = "270, 265"; $btnOk.Size="110, 30"; $btnOk.DialogResult = "OK"; $btnOk.BackColor = "#4F7C9B"; $btnOk.ForeColor = "White"; $btnOk.FlatStyle = "Flat"; $btnOk.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnOk 4; $btnOk.TabStop = $false
-    $btnCancel = New-Object Windows.Forms.Button; $btnCancel.Text = "Cancel"; $btnCancel.Location = "390, 265"; $btnCancel.Size="100, 30"; $btnCancel.DialogResult = "Cancel"; $btnCancel.BackColor = $colorBtnHex; $btnCancel.ForeColor = $colorTextHex; $btnCancel.FlatStyle = "Flat"; $btnCancel.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnCancel 4; $btnCancel.TabStop = $false
-    $dlg.Controls.AddRange(@($lbl, $txt, $btnImport, $btnOk, $btnCancel)); $dlg.AcceptButton = $btnOk; $dlg.CancelButton = $btnCancel
-    
-    $dlg.Add_Shown({ $dlg.ActiveControl = $lbl }) 
-    if ($dlg.ShowDialog() -eq "OK") {
-        if ([string]::IsNullOrWhiteSpace($txt.Text)) { $global:v2rayChainJson = ""; return $true }
+
+    $btnOk.Add_Click({
+        if ([string]::IsNullOrWhiteSpace($txtInput.Text)) { 
+            $global:v2rayChainJson = ""
+            $dlg.DialogResult = $true
+            $dlg.Close()
+            return 
+        }
         try { 
-            $parsed = $txt.Text | ConvertFrom-Json 
+            $parsed = $txtInput.Text | ConvertFrom-Json 
             $testNode = if ($null -ne $parsed.outbounds) { $parsed.outbounds[0] } else { $parsed }
             if (-not $testNode.protocol) { throw "Missing Protocol" }
-            $global:v2rayChainJson = $txt.Text.Trim(); return $true 
-        } catch { [System.Windows.Forms.MessageBox]::Show("Invalid Xray JSON!", "Error", 0, 16); return $false }
+            $dlg.DialogResult = $true
+            $dlg.Close()
+        } catch { 
+            [System.Windows.Forms.MessageBox]::Show("Invalid Xray JSON syntax!", "Validation Error", 0, 16) 
+        }
+    })
+    
+    $dlg.Add_Loaded({
+        $txtInput.Focus() | Out-Null
+        $txtInput.CaretIndex = $txtInput.Text.Length
+    })
+
+    if ($dlg.ShowDialog() -eq $true) { 
+        if (-not [string]::IsNullOrWhiteSpace($txtInput.Text)) { $global:v2rayChainJson = $txtInput.Text.Trim() }
+        return $true 
     }
-    $dlg.Dispose(); return $false
+    return $false
 }
 function Show-OutboundProxyDialog {
-    $dlg = New-Object Windows.Forms.Form; $dlg.Text = "Outbound Proxy Configuration"; $dlg.Size = New-Object Drawing.Size(335, 260); $dlg.StartPosition = "CenterParent"; $dlg.BackColor = $colorBgHex; $dlg.FormBorderStyle = "FixedDialog"; $dlg.MaximizeBox = $false
+    $xaml = @"
+    <Window 
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Outbound Proxy Configuration" Height="280" Width="420" 
+        WindowStartupLocation="CenterOwner" Background="#1A1A1B" Foreground="#E2E8F0"
+        ResizeMode="NoResize" FontFamily="Segoe UI" ShowInTaskbar="False">
+        <Window.Resources>
+            <Style TargetType="Button">
+                <Setter Property="Background" Value="#3A3F44"/>
+                <Setter Property="Foreground" Value="#E2E8F0"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border Background="{TemplateBinding Background}" CornerRadius="4">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" Margin="{TemplateBinding Padding}"/>
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+                <Style.Triggers>
+                    <Trigger Property="IsMouseOver" Value="True">
+                        <Setter Property="Background" Value="#4A5568"/>
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+        </Window.Resources>
+        <Canvas>
+            <Border Name="borderMain" Canvas.Left="12" Canvas.Top="12" Width="380" Height="210" Background="#121417" CornerRadius="4" BorderBrush="#2D3748" BorderThickness="1">
+                <Canvas>
+                    <TextBlock Text="OUTBOUND PROXY CONFIGURATION" Canvas.Left="15" Canvas.Top="12" FontSize="10" Foreground="#A0AEC0" FontWeight="Bold"/>
+                    
+                    <Border Canvas.Left="15" Canvas.Top="35" Width="261" Height="25" Background="#1A202C" BorderBrush="#2D3748" BorderThickness="1" CornerRadius="4">
+                        <Canvas>
+                            <Border Background="#2D3748" Width="100" Height="23" CornerRadius="3,0,0,3">
+                                <TextBlock Text="Proxy Type" Foreground="#A0AEC0" FontSize="11" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-1,0,0"/>
+                            </Border>
+                            <Button Name="btnHttps" Canvas.Left="100" Width="80" Height="23" Content="HTTPS" FontSize="11" Padding="0,0,0,2">
+                                <Button.Style>
+                                    <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="Button">
+                                                    <Border Background="{TemplateBinding Background}">
+                                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" Margin="{TemplateBinding Padding}"/>
+                                                    </Border>
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </Button.Style>
+                            </Button>
+                            <Rectangle Canvas.Left="180" Width="1" Height="23" Fill="#2D3748"/>
+                            <Button Name="btnSocks" Canvas.Left="181" Width="80" Height="23" Content="SOCKS5" FontSize="11" Padding="0,0,0,2">
+                                <Button.Style>
+                                    <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="Button">
+                                                    <Border Background="{TemplateBinding Background}" CornerRadius="0,3,3,0">
+                                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" Margin="{TemplateBinding Padding}"/>
+                                                    </Border>
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </Button.Style>
+                            </Button>
+                        </Canvas>
+                    </Border>
+                    
+                    <TextBlock Text="Address/IP:" Canvas.Left="15" Canvas.Top="70" FontSize="11" Foreground="#A0AEC0"/>
+                    <TextBox Name="txtAddr" Canvas.Left="15" Canvas.Top="88" Width="240" Height="26" 
+                             Background="#0A0C0F" Foreground="#68D391" BorderBrush="#2D3748" BorderThickness="1" 
+                             Padding="4" FontSize="12" FontFamily="Consolas" VerticalContentAlignment="Center"/>
+                             
+                    <TextBlock Text="Port:" Canvas.Left="270" Canvas.Top="70" FontSize="11" Foreground="#A0AEC0"/>
+                    <TextBox Name="txtPort" Canvas.Left="270" Canvas.Top="88" Width="95" Height="26" 
+                             Background="#0A0C0F" Foreground="#68D391" BorderBrush="#2D3748" BorderThickness="1" 
+                             Padding="4" FontSize="12" FontFamily="Consolas" VerticalContentAlignment="Center"/>
+                             
+                    <Border Canvas.Left="15" Canvas.Top="128" Width="180" Height="25" Background="#1A202C" BorderBrush="#2D3748" BorderThickness="1" CornerRadius="4">
+                        <Canvas>
+                            <Border Background="#2D3748" Width="100" Height="23" CornerRadius="3,0,0,3">
+                                <TextBlock Text="Authentication" Foreground="#A0AEC0" FontSize="11" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-1,0,0"/>
+                            </Border>
+                            <Button Name="btnAuthTog" Canvas.Left="100" Width="80" Height="23" Content="Disabled" FontSize="11" Padding="0,0,0,2">
+                                <Button.Style>
+                                    <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="Button">
+                                                    <Border Background="{TemplateBinding Background}" CornerRadius="0,3,3,0">
+                                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" Margin="{TemplateBinding Padding}"/>
+                                                    </Border>
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </Button.Style>
+                            </Button>
+                        </Canvas>
+                    </Border>
+
+                    <Canvas Name="panAuth" Canvas.Left="15" Canvas.Top="165" Visibility="Hidden" Opacity="0">
+                        <TextBlock Text="Username:" Canvas.Left="0" Canvas.Top="0" FontSize="11" Foreground="#A0AEC0"/>
+                        <TextBox Name="txtUser" Canvas.Left="0" Canvas.Top="18" Width="165" Height="26" 
+                                 Background="#0A0C0F" Foreground="#68D391" BorderBrush="#2D3748" BorderThickness="1" 
+                                 Padding="4" FontSize="12" FontFamily="Consolas" VerticalContentAlignment="Center"/>
+
+                        <TextBlock Text="Password:" Canvas.Left="185" Canvas.Top="0" FontSize="11" Foreground="#A0AEC0"/>
+                        <TextBox Name="txtPass" Canvas.Left="185" Canvas.Top="18" Width="165" Height="26" 
+                                 Background="#0A0C0F" Foreground="#68D391" BorderBrush="#2D3748" BorderThickness="1" 
+                                 Padding="4" FontSize="12" FontFamily="Consolas" VerticalContentAlignment="Center"/>
+                    </Canvas>
+
+                    <Button Name="btnOk" Content="Save" Canvas.Left="175" Canvas.Top="168" Width="90" Height="25" IsDefault="True">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                <Setter Property="Background" Value="#4E7A5E"/>
+                                <Style.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter Property="Background" Value="#5F9774"/>
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                    
+                    <Button Name="btnCancel" Content="Cancel" Canvas.Left="275" Canvas.Top="168" Width="90" Height="25" IsCancel="True"/>
+                </Canvas>
+            </Border>
+        </Canvas>
+    </Window>
+"@
+    $dlg = [Windows.Markup.XamlReader]::Parse($xaml)
     
+    $dlg.Owner = $form
+
+    $borderMain = $dlg.FindName("borderMain")
+    $btnHttps = $dlg.FindName("btnHttps")
+    $btnSocks = $dlg.FindName("btnSocks")
+    $txtAddr = $dlg.FindName("txtAddr")
+    $txtPort = $dlg.FindName("txtPort")
+    $btnAuthTog = $dlg.FindName("btnAuthTog")
+    $panAuth = $dlg.FindName("panAuth")
+    $txtUser = $dlg.FindName("txtUser")
+    $txtPass = $dlg.FindName("txtPass")
+    $btnOk = $dlg.FindName("btnOk")
+    $btnCancel = $dlg.FindName("btnCancel")
+
+    # Load Colors for Toggles
+    $bc = New-Object System.Windows.Media.BrushConverter
+    $brushOn = $bc.ConvertFromString("#4E7A5E")
+    $brushOff = $bc.ConvertFromString("#8B4A4A")
+    $brushInactive = $bc.ConvertFromString("#1A202C")
+
+    # Initialize Values
     $tempType = $global:outboundProxyType
     if ([string]::IsNullOrEmpty($tempType)) { $tempType = "SOCKS5" }
+    $txtAddr.Text = $global:outboundProxyAddress
+    $txtPort.Text = $global:outboundProxyPort
+    $txtUser.Text = $global:outboundProxyUser
+    $txtPass.Text = $global:outboundProxyPass
     
-    $pnlProxyType = New-Object Windows.Forms.Panel; $pnlProxyType.Size = "290,26"; $pnlProxyType.Location = "15,15"
-    Set-RoundedCorners $pnlProxyType 4
-    
-    $lblType = New-Object Windows.Forms.Label; $lblType.Text = "Proxy Type"; $lblType.Location = "0,0"; $lblType.Size = "100,26"; $lblType.BackColor = "#2D3748"; $lblType.ForeColor = $colorTextHex; $lblType.TextAlign = "MiddleCenter"; $lblType.Font = New-Object System.Drawing.Font("Segoe UI", 10)
-    $btnHttps = New-Object Windows.Forms.Button; $btnHttps.Text = "HTTPS"; $btnHttps.Location = "100, 0"; $btnHttps.Size = "95, 26"; $btnHttps.FlatStyle = "Flat"; $btnHttps.FlatAppearance.BorderSize = 0; $btnHttps.ForeColor = "White"; $btnHttps.Cursor = "Hand"; $btnHttps.TabStop = $false; $btnHttps.Font = New-Object System.Drawing.Font("Segoe UI", 10)
-    $btnSocks = New-Object Windows.Forms.Button; $btnSocks.Text = "SOCKS5"; $btnSocks.Location = "195, 0"; $btnSocks.Size = "95, 26"; $btnSocks.FlatStyle = "Flat"; $btnSocks.FlatAppearance.BorderSize = 0; $btnSocks.ForeColor = "White"; $btnSocks.Cursor = "Hand"; $btnSocks.TabStop = $false; $btnSocks.Font = New-Object System.Drawing.Font("Segoe UI", 10)
-    $pnlProxyType.Controls.AddRange(@($lblType, $btnHttps, $btnSocks))
-    
+    if ($global:enableOutboundAuth) { $btnAuthTog.Content = "Enabled"; $btnAuthTog.Background = $brushOn } else { $btnAuthTog.Content = "Disabled"; $btnAuthTog.Background = $brushOff }
+
     function Update-TypeButtons {
-        if ($tempType -eq "HTTPS") { $btnHttps.BackColor = "#4E7A5E"; $btnSocks.BackColor = "#1A202C" } else { $btnSocks.BackColor = "#4E7A5E"; $btnHttps.BackColor = "#1A202C" }
+        if ($tempType -eq "HTTPS") { $btnHttps.Background = $brushOn; $btnSocks.Background = $brushInactive } else { $btnSocks.Background = $brushOn; $btnHttps.Background = $brushInactive }
     }
-    Update-TypeButtons
+    
+    $isFirstLoad = $true
+    function Evaluate-AuthView {
+        $targetH = if ($btnAuthTog.Content -eq "Enabled") { 340.0 } else { 280.0 }
+        $targetBorderH = if ($btnAuthTog.Content -eq "Enabled") { 267.0 } else { 210.0 }
+        $targetBtnTop = if ($btnAuthTog.Content -eq "Enabled") { 225.0 } else { 168.0 }
+        $targetOpac = if ($btnAuthTog.Content -eq "Enabled") { 1.0 } else { 0.0 }
+
+        if ($isFirstLoad) {
+            $dlg.Height = $targetH; $borderMain.Height = $targetBorderH
+            $btnOk.SetValue([System.Windows.Controls.Canvas]::TopProperty, [double]$targetBtnTop)
+            $btnCancel.SetValue([System.Windows.Controls.Canvas]::TopProperty, [double]$targetBtnTop)
+            $panAuth.Opacity = $targetOpac
+            if ($btnAuthTog.Content -eq "Enabled") { $panAuth.Visibility = "Visible" } else { $panAuth.Visibility = "Hidden" }
+        } else {
+            if ($btnAuthTog.Content -eq "Enabled") { $panAuth.Visibility = "Visible" }
+            $dur = New-Object System.Windows.Duration([TimeSpan]::FromMilliseconds(250))
+            
+            $dlg.BeginAnimation([System.Windows.Window]::HeightProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation([double]$targetH, $dur)))
+            $borderMain.BeginAnimation([System.Windows.FrameworkElement]::HeightProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation([double]$targetBorderH, $dur)))
+            $btnOk.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation([double]$targetBtnTop, $dur)))
+            $btnCancel.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation([double]$targetBtnTop, $dur)))
+            $panAuth.BeginAnimation([System.Windows.UIElement]::OpacityProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation([double]$targetOpac, $dur)))
+
+            if ($btnAuthTog.Content -eq "Disabled") {
+                $hideTimer = New-Object System.Windows.Threading.DispatcherTimer
+                $hideTimer.Interval = [TimeSpan]::FromMilliseconds(250)
+                $hideTimer.add_Tick({ 
+                    $hideTimer.Stop()
+                    if ($btnAuthTog.Content -eq "Disabled") { $panAuth.Visibility = "Hidden" } 
+                })
+                $hideTimer.Start()
+            }
+        }
+    }
+
     $btnHttps.Add_Click({ $tempType = "HTTPS"; Update-TypeButtons })
     $btnSocks.Add_Click({ $tempType = "SOCKS5"; Update-TypeButtons })
     
-    $lblAddr = New-Object Windows.Forms.Label; $lblAddr.Text = "Address/IP:"; $lblAddr.ForeColor = $colorTextHex; $lblAddr.Location = "15,60"; $lblAddr.AutoSize = $true
-    $txtAddr = New-Object Windows.Forms.TextBox; $txtAddr.Location = "15,80"; $txtAddr.Size = "195, 25"; $txtAddr.BackColor = "#2D3748"; $txtAddr.ForeColor = "White"; $txtAddr.Text = $global:outboundProxyAddress; $txtAddr.BorderStyle = "None"; $txtAddr.Font = New-Object System.Drawing.Font("Segoe UI", 11)
-    
-    $lblPort = New-Object Windows.Forms.Label; $lblPort.Text = "Port:"; $lblPort.ForeColor = $colorTextHex; $lblPort.Location = "225,60"; $lblPort.AutoSize = $true
-    $txtPort = New-Object Windows.Forms.TextBox; $txtPort.Location = "225,80"; $txtPort.Size = "80, 25"; $txtPort.BackColor = "#2D3748"; $txtPort.ForeColor = "White"; $txtPort.Text = $global:outboundProxyPort; $txtPort.BorderStyle = "None"; $txtPort.Font = New-Object System.Drawing.Font("Segoe UI", 11)
-    
-    $btnAuthLbl = New-Object Windows.Forms.Button; $btnAuthLbl.Location = "15, 125"; $btnAuthLbl.Size = "195, 25"; $btnAuthLbl.Text = "Authentication"; $btnAuthLbl.BackColor = "#2D3748"; $btnAuthLbl.ForeColor = $colorTextHex; $btnAuthLbl.FlatStyle = "Flat"; $btnAuthLbl.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnAuthLbl 4; $btnAuthLbl.TabStop = $false
-    $btnAuthTog = New-Object Windows.Forms.Button; $btnAuthTog.Location = "220, 125"; $btnAuthTog.Size = "85, 25"; $btnAuthTog.FlatStyle = "Flat"; $btnAuthTog.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnAuthTog 4; $btnAuthTog.ForeColor = $colorTextHex; $btnAuthTog.Cursor = "Hand"; $btnAuthTog.TabStop = $false
-    if ($global:enableOutboundAuth) { $btnAuthTog.Text = "Enabled"; $btnAuthTog.BackColor = "#4E7A5E" } else { $btnAuthTog.Text = "Disabled"; $btnAuthTog.BackColor = "#8B4A4A" }
-    
-    $lblUser = New-Object Windows.Forms.Label; $lblUser.Text = "Username:"; $lblUser.ForeColor = $colorTextHex; $lblUser.Location = "15,165"; $lblUser.AutoSize = $true
-    $txtUser = New-Object Windows.Forms.TextBox; $txtUser.Location = "15,185"; $txtUser.Size = "135, 25"; $txtUser.BackColor = "#2D3748"; $txtUser.ForeColor = "White"; $txtUser.Text = $global:outboundProxyUser; $txtUser.BorderStyle = "None"; $txtUser.Font = New-Object System.Drawing.Font("Segoe UI", 11)
-    
-    $lblPass = New-Object Windows.Forms.Label; $lblPass.Text = "Password:"; $lblPass.ForeColor = $colorTextHex; $lblPass.Location = "170,165"; $lblPass.AutoSize = $true
-    $txtPass = New-Object Windows.Forms.TextBox; $txtPass.Location = "170,185"; $txtPass.Size = "135, 25"; $txtPass.BackColor = "#2D3748"; $txtPass.ForeColor = "White"; $txtPass.Text = $global:outboundProxyPass; $txtPass.BorderStyle = "None"; $txtPass.Font = New-Object System.Drawing.Font("Segoe UI", 11)
-    
-    $btnOk = New-Object Windows.Forms.Button; $btnOk.Text = "Save"; $btnOk.Size = "80,30"; $btnOk.DialogResult = "OK"; $btnOk.BackColor = $colorBtnHex; $btnOk.ForeColor = $colorTextHex; $btnOk.FlatStyle = "Flat"; $btnOk.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnOk 4; $btnOk.TabStop = $false
-    $btnCancel = New-Object Windows.Forms.Button; $btnCancel.Text = "Cancel"; $btnCancel.Location = "300, 140"; $btnCancel.Size = "80,30"; $btnCancel.DialogResult = "Cancel"; $btnCancel.BackColor = $colorBtnHex; $btnCancel.ForeColor = $colorTextHex; $btnCancel.FlatStyle = "Flat"; $btnCancel.FlatAppearance.BorderSize = 0; Set-RoundedCorners $btnCancel 4; $btnCancel.TabStop = $false
-    
-    function Evaluate-AuthView {
-        $isAuthOn = ($btnAuthTog.Text -eq "Enabled")
-        $lblUser.Visible = $isAuthOn; $txtUser.Visible = $isAuthOn; $lblPass.Visible = $isAuthOn; $txtPass.Visible = $isAuthOn
-        if ($isAuthOn) { $dlg.ClientSize = New-Object Drawing.Size(335, 280); $btnOk.Location = "125, 230"; $btnCancel.Location = "225, 230" } else { $dlg.ClientSize = New-Object Drawing.Size(335, 210); $btnOk.Location = "125, 165"; $btnCancel.Location = "225, 165" }
-    }
-    Evaluate-AuthView
-    
     $btnAuthTog.Add_Click({ 
-        if ($btnAuthTog.Text -eq "Disabled") { $btnAuthTog.Text = "Enabled"; $btnAuthTog.BackColor = "#4E7A5E" } else { $btnAuthTog.Text = "Disabled"; $btnAuthTog.BackColor = "#8B4A4A" }
+        if ($btnAuthTog.Content -eq "Disabled") { $btnAuthTog.Content = "Enabled"; $btnAuthTog.Background = $brushOn } else { $btnAuthTog.Content = "Disabled"; $btnAuthTog.Background = $brushOff }
         Evaluate-AuthView 
     })
-    $btnAuthLbl.Add_Click({ $btnAuthTog.PerformClick() })
-    $dlg.Controls.AddRange(@($pnlProxyType, $lblAddr, $txtAddr, $lblPort, $txtPort, $btnAuthLbl, $btnAuthTog, $lblUser, $txtUser, $lblPass, $txtPass, $btnOk, $btnCancel))
-    $dlg.AcceptButton = $btnOk; $dlg.CancelButton = $btnCancel
-    
-    $dlg.Add_Shown({ $dlg.ActiveControl = $lblAddr }) 
-    if ($dlg.ShowDialog() -eq "OK") { 
-        $global:outboundProxyAddress = $txtAddr.Text.Trim(); $global:outboundProxyPort = $txtPort.Text.Trim(); $global:outboundProxyType = $tempType
-        $global:enableOutboundAuth = ($btnAuthTog.Text -eq "Enabled"); $global:outboundProxyUser = $txtUser.Text.Trim(); $global:outboundProxyPass = $txtPass.Text.Trim(); return $true 
-    }
-    $dlg.Dispose(); return $false
+
+    $btnOk.Add_Click({
+        $global:outboundProxyAddress = $txtAddr.Text.Trim()
+        $global:outboundProxyPort = $txtPort.Text.Trim()
+        $global:outboundProxyType = $tempType
+        $global:enableOutboundAuth = ($btnAuthTog.Content -eq "Enabled")
+        $global:outboundProxyUser = $txtUser.Text.Trim()
+        $global:outboundProxyPass = $txtPass.Text.Trim()
+        $dlg.DialogResult = $true
+        $dlg.Close()
+    })
+
+    $dlg.Add_Loaded({
+        Update-TypeButtons
+        Evaluate-AuthView
+        $isFirstLoad = $false
+        $txtAddr.Focus() | Out-Null
+        $txtAddr.CaretIndex = $txtAddr.Text.Length
+    })
+
+    if ($dlg.ShowDialog() -eq $true) { return $true }
+    return $false
 }
 
+function Show-DohDialog {
+    $xaml = @"
+    <Window 
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="DNS Settings" Height="300" Width="420" 
+        WindowStartupLocation="CenterOwner" Background="#1A1A1B" Foreground="#E2E8F0"
+        ResizeMode="NoResize" FontFamily="Segoe UI" ShowInTaskbar="False">
+        <Window.Resources>
+            <Style TargetType="Button">
+                <Setter Property="Background" Value="#3A3F44"/>
+                <Setter Property="Foreground" Value="#E2E8F0"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border Background="{TemplateBinding Background}" CornerRadius="4">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" Margin="{TemplateBinding Padding}"/>
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+                <Style.Triggers>
+                    <Trigger Property="IsMouseOver" Value="True">
+                        <Setter Property="Background" Value="#4A5568"/>
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+        </Window.Resources>
+        <Canvas>
+            <Border Name="borderMain" Canvas.Left="12" Canvas.Top="12" Width="380" Height="234" Background="#121417" CornerRadius="4" BorderBrush="#2D3748" BorderThickness="1">
+                <Canvas>
+                    <TextBlock Text="DNS SETTINGS" Canvas.Left="15" Canvas.Top="12" FontSize="10" Foreground="#A0AEC0" FontWeight="Bold"/>
+                    
+                    <TextBlock Name="lblWarn" Text="⚠️ Tor DoH cannot be active while an Outbound Proxy is enabled." Canvas.Left="15" Canvas.Top="35" FontSize="11" Foreground="#F6AD55" Visibility="Hidden"/>
+                    
+                    <TextBlock Name="lblTor" Text="Tor Outbound DoH (Initial Handshake):" Canvas.Left="15" Canvas.Top="35" FontSize="11" Foreground="#A0AEC0"/>
+                    <Border Name="borTor" Canvas.Left="15" Canvas.Top="55" Width="350" Height="26" Background="#0A0C0F" BorderBrush="#2D3748" BorderThickness="1" CornerRadius="4">
+                        <Canvas>
+                            <TextBox Name="txtTorDoh" Canvas.Left="2" Canvas.Top="0" Width="268" Height="24" 
+         Background="#0A0C0F" Foreground="#68D391" CaretBrush="White" BorderThickness="0" 
+         Padding="5,0,4,0" FontSize="12" FontFamily="Consolas" VerticalContentAlignment="Center"/>
+                            
+                            <Rectangle Canvas.Left="269" Canvas.Top="0" Width="1" Height="24" Fill="#2D3748"/>
+                            
+                            <Button Name="btnTorTog" Canvas.Left="270" Canvas.Top="0" Width="80" Height="24" Content="Disabled" FontSize="11" Padding="0,0,0,2">
+                                <Button.Style>
+                                    <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="Button">
+                                                    <Border Background="{TemplateBinding Background}" CornerRadius="0,3,3,0">
+                                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" Margin="{TemplateBinding Padding}"/>
+                                                    </Border>
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </Button.Style>
+                            </Button>
+                        </Canvas>
+                    </Border>
+
+                    <TextBlock Name="lblUp" Text="Upstream DoH (Xray / Sing-box):" Canvas.Left="15" Canvas.Top="90" FontSize="11" Foreground="#A0AEC0"/>
+                    <Border Name="borUp" Canvas.Left="15" Canvas.Top="110" Width="350" Height="26" Background="#0A0C0F" BorderBrush="#2D3748" BorderThickness="1" CornerRadius="4">
+                        <Canvas>
+                            <TextBox Name="txtUpDoh" Canvas.Left="2" Canvas.Top="0" Width="268" Height="24" 
+         Background="#0A0C0F" Foreground="#68D391" CaretBrush="White" BorderThickness="0" 
+         Padding="5,0,4,0" FontSize="12" FontFamily="Consolas" VerticalContentAlignment="Center"/>
+                            
+                            <Rectangle Canvas.Left="269" Canvas.Top="0" Width="1" Height="24" Fill="#2D3748"/>
+                            
+                            <Button Name="btnUpTog" Canvas.Left="270" Canvas.Top="0" Width="80" Height="24" Content="Disabled" FontSize="11" Padding="0,0,0,2">
+                                <Button.Style>
+                                    <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="Button">
+                                                    <Border Background="{TemplateBinding Background}" CornerRadius="0,3,3,0">
+                                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" Margin="{TemplateBinding Padding}"/>
+                                                    </Border>
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </Button.Style>
+                            </Button>
+                        </Canvas>
+                    </Border>
+
+                    <TextBlock Name="lblHint" Canvas.Left="15" Canvas.Top="145" Width="350" TextWrapping="Wrap" FontSize="11" Foreground="#4A5568" 
+                               Text="Hint: Enter a full DoH URL or a standard IPv4 DNS.&#x0a;(e.g., https://1.1.1.1/dns-query OR 10.202.10.10)"/>
+                               
+                    <Button Name="btnOk" Content="Save" Canvas.Left="175" Canvas.Top="192" Width="90" Height="25" IsDefault="True">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                <Setter Property="Background" Value="#4E7A5E"/>
+                                <Style.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter Property="Background" Value="#5F9774"/>
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                    
+                    <Button Name="btnCancel" Content="Cancel" Canvas.Left="275" Canvas.Top="192" Width="90" Height="25" IsCancel="True"/>
+                </Canvas>
+            </Border>
+        </Canvas>
+    </Window>
+"@
+    $dlg = [Windows.Markup.XamlReader]::Parse($xaml)
+    
+    $dlg.Owner = $form
+
+    $borderMain = $dlg.FindName("borderMain")
+    $lblWarn = $dlg.FindName("lblWarn")
+    $lblTor = $dlg.FindName("lblTor")
+    $borTor = $dlg.FindName("borTor")
+    $btnTorTog = $dlg.FindName("btnTorTog")
+    $txtTorDoh = $dlg.FindName("txtTorDoh")
+    
+    $lblUp = $dlg.FindName("lblUp")
+    $borUp = $dlg.FindName("borUp")
+    $btnUpTog = $dlg.FindName("btnUpTog")
+    $txtUpDoh = $dlg.FindName("txtUpDoh")
+    
+    $lblHint = $dlg.FindName("lblHint")
+    $btnOk = $dlg.FindName("btnOk")
+    $btnCancel = $dlg.FindName("btnCancel")
+
+    # Load Colors
+    $bc = New-Object System.Windows.Media.BrushConverter
+    $brushOn = $bc.ConvertFromString("#4E7A5E")
+    $brushOff = $bc.ConvertFromString("#8B4A4A")
+    $brushInactive = $bc.ConvertFromString("#1A202C")
+
+    # Initialize Values
+    $txtTorDoh.Text = $global:torDohUrl
+    $txtUpDoh.Text = $global:upstreamDohUrl
+
+    if ($global:enableUpstreamDoh) { $btnUpTog.Content = "Enabled"; $btnUpTog.Background = $brushOn } else { $btnUpTog.Content = "Disabled"; $btnUpTog.Background = $brushOff }
+
+    # Dynamic Layout Check
+    if ($global:enableOutboundProxy) {
+        $dlg.Height = 320
+        $borderMain.Height = 254
+        
+        $lblWarn.Visibility = "Visible"
+        
+        $lblTor.SetValue([System.Windows.Controls.Canvas]::TopProperty, [double]55)
+        $borTor.SetValue([System.Windows.Controls.Canvas]::TopProperty, [double]75)
+        $lblUp.SetValue([System.Windows.Controls.Canvas]::TopProperty, [double]110)
+        $borUp.SetValue([System.Windows.Controls.Canvas]::TopProperty, [double]130)
+        $lblHint.SetValue([System.Windows.Controls.Canvas]::TopProperty, [double]165)
+        
+        $btnOk.SetValue([System.Windows.Controls.Canvas]::TopProperty, [double]212)
+        $btnCancel.SetValue([System.Windows.Controls.Canvas]::TopProperty, [double]212)
+
+        $btnTorTog.Content = "Disabled"
+        $btnTorTog.Background = $brushInactive
+        $btnTorTog.IsEnabled = $false
+        $txtTorDoh.IsEnabled = $false
+        $borTor.Opacity = 0.3
+        $lblTor.Opacity = 0.5
+    } else {
+        if ($global:enableTorDoh) { $btnTorTog.Content = "Enabled"; $btnTorTog.Background = $brushOn } else { $btnTorTog.Content = "Disabled"; $btnTorTog.Background = $brushOff }
+        
+        $btnTorTog.Add_Click({
+            if ($btnTorTog.Content -eq "Disabled") { $btnTorTog.Content = "Enabled"; $btnTorTog.Background = $brushOn } else { $btnTorTog.Content = "Disabled"; $btnTorTog.Background = $brushOff }
+        })
+    }
+
+    $btnUpTog.Add_Click({
+        if ($btnUpTog.Content -eq "Disabled") { $btnUpTog.Content = "Enabled"; $btnUpTog.Background = $brushOn } else { $btnUpTog.Content = "Disabled"; $btnUpTog.Background = $brushOff }
+    })
+
+    $btnOk.Add_Click({
+        $global:enableTorDoh = ($btnTorTog.Content -eq "Enabled")
+        if (-not [string]::IsNullOrWhiteSpace($txtTorDoh.Text)) { $global:torDohUrl = $txtTorDoh.Text.Trim() }
+        
+        $global:enableUpstreamDoh = ($btnUpTog.Content -eq "Enabled")
+        if (-not [string]::IsNullOrWhiteSpace($txtUpDoh.Text)) { $global:upstreamDohUrl = $txtUpDoh.Text.Trim() }
+        
+        $dlg.DialogResult = $true
+        $dlg.Close()
+    })
+
+    $dlg.Add_Loaded({
+        $txtTorDoh.Focus() | Out-Null
+        $txtTorDoh.CaretIndex = $txtTorDoh.Text.Length
+    })
+
+    if ($dlg.ShowDialog() -eq $true) { return $true }
+    return $false
+}
+function Show-ExitNodeDialog {
+    $xaml = @"
+    <Window 
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Custom Exit-Node Selection" Height="210" Width="420" 
+        WindowStartupLocation="CenterOwner" Background="#1A1A1B" Foreground="#E2E8F0"
+        ResizeMode="NoResize" FontFamily="Segoe UI" ShowInTaskbar="False">
+        <Window.Resources>
+            <Style TargetType="Button">
+                <Setter Property="Background" Value="#3A3F44"/>
+                <Setter Property="Foreground" Value="#E2E8F0"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border Background="{TemplateBinding Background}" CornerRadius="4">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+                <Style.Triggers>
+                    <Trigger Property="IsMouseOver" Value="True">
+                        <Setter Property="Background" Value="#4A5568"/>
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+
+            <Style TargetType="ComboBox" x:Key="DarkComboBox">
+                <Setter Property="Foreground" Value="#E2E8F0"/>
+                <Setter Property="Background" Value="#0A0C0F"/>
+                <Setter Property="BorderBrush" Value="#2D3748"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ComboBox">
+                            <Grid>
+                                <ToggleButton Name="ToggleButton" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" Focusable="False" IsChecked="{Binding Path=IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}" ClickMode="Press">
+                                    <ToggleButton.Template>
+                                        <ControlTemplate TargetType="ToggleButton">
+                                            <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="4">
+                                                <ContentPresenter HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                            </Border>
+                                        </ControlTemplate>
+                                    </ToggleButton.Template>
+                                    <Path Fill="#A0AEC0" Data="M0,0 L4,4 L8,0 Z" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                </ToggleButton>
+                                <ContentPresenter Name="ContentSite" IsHitTestVisible="False" Content="{TemplateBinding SelectionBoxItem}" Margin="8,0,23,2" VerticalAlignment="Center" HorizontalAlignment="Left">
+                                    <ContentPresenter.Resources>
+                                        <Style TargetType="TextBlock"><Setter Property="Foreground" Value="#68D391"/></Style>
+                                    </ContentPresenter.Resources>
+                                </ContentPresenter>
+                                <Popup Name="Popup" Placement="Bottom" IsOpen="{TemplateBinding IsDropDownOpen}" AllowsTransparency="True" Focusable="False" PopupAnimation="Slide">
+                                    <Border Name="DropDownBorder" Background="#1A202C" BorderThickness="1" BorderBrush="#3A3F44" MinWidth="{TemplateBinding ActualWidth}" MaxHeight="150">
+                                        <ScrollViewer Margin="0,2" SnapsToDevicePixels="True">
+                                            <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Contained" />
+                                        </ScrollViewer>
+                                    </Border>
+                                </Popup>
+                            </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+            <Style TargetType="ComboBoxItem">
+                <Setter Property="Foreground" Value="#E2E8F0"/>
+                <Setter Property="Padding" Value="4,2"/>
+                <Style.Triggers>
+                    <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="#4A5568"/></Trigger>
+                </Style.Triggers>
+            </Style>
+        </Window.Resources>
+
+        <Canvas>
+            <Border Canvas.Left="12" Canvas.Top="12" Width="380" Height="144" Background="#121417" CornerRadius="4" BorderBrush="#2D3748" BorderThickness="1">
+                <Canvas>
+                    <TextBlock Text="CUSTOM EXIT-NODE ROUTING" Canvas.Left="15" Canvas.Top="12" FontSize="10" Foreground="#A0AEC0" FontWeight="Bold"/>
+                    <TextBlock Text="Select your desired geographic exit location:" Canvas.Left="15" Canvas.Top="35" FontSize="11" Foreground="#E2E8F0"/>
+                    
+                    <ComboBox Name="cmbCountries" Canvas.Left="15" Canvas.Top="57" Width="350" Height="28" FontSize="11" FontFamily="Consolas" Style="{StaticResource DarkComboBox}"/>
+                             
+                    <Button Name="btnOk" Content="Save" Canvas.Left="175" Canvas.Top="102" Width="90" Height="25" IsDefault="True">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                <Setter Property="Background" Value="#4E7A5E"/>
+                                <Style.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter Property="Background" Value="#5F9774"/>
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                    
+                    <Button Name="btnCancel" Content="Cancel" Canvas.Left="275" Canvas.Top="102" Width="90" Height="25" IsCancel="True"/>
+                </Canvas>
+            </Border>
+        </Canvas>
+    </Window>
+"@
+    $dlg = [Windows.Markup.XamlReader]::Parse($xaml)
+    
+    $dlg.Owner = $form
+
+    $cmbCountries = $dlg.FindName("cmbCountries")
+    $btnOk = $dlg.FindName("btnOk")
+    
+    $countries = [ordered]@{ 
+        "Argentina" = "ar"; "Australia" = "au"; "Brazil" = "br"; "Canada" = "ca"; 
+        "Finland" = "fi"; "France" = "fr"; "Germany" = "de"; "Hong Kong" = "hk"; 
+        "Iceland" = "is"; "India" = "in"; "Italy" = "it"; "Japan" = "jp"; 
+        "Mexico" = "mx"; "Netherlands" = "nl"; "New Zealand" = "nz"; "Romania" = "ro"; 
+        "Singapore" = "sg"; "South Africa" = "za"; "South Korea" = "kr"; "Spain" = "es"; 
+        "Sweden" = "se"; "Switzerland" = "ch"; "United Kingdom" = "uk"; "United States" = "us"
+    }
+    
+    foreach ($c in $countries.Keys) { 
+        $cbi = New-Object System.Windows.Controls.ComboBoxItem
+        $cbi.Content = "$c ($($countries[$c].ToUpper()))"
+        $cbi.Tag = $countries[$c]
+        $cmbCountries.Items.Add($cbi) | Out-Null
+    }
+    
+    # Pre-select based on the Tag
+    foreach ($item in $cmbCountries.Items) {
+        if ($item.Tag -eq $global:customExitCountry) { $cmbCountries.SelectedItem = $item; break }
+    }
+    if ($null -eq $cmbCountries.SelectedItem -and $cmbCountries.Items.Count -gt 0) { $cmbCountries.SelectedIndex = 0 }
+
+    $btnOk.Add_Click({
+        $dlg.DialogResult = $true
+        $dlg.Close()
+    })
+
+    if ($dlg.ShowDialog() -eq $true) { 
+        $global:customExitCountry = $cmbCountries.SelectedItem.Tag.ToLower()
+        return $true 
+    }
+    return $false
+}
 # --- CORE LOGIC ---
 function Save-Config {
-    $selConfig = if ($comboConfig.SelectedItem.Tag -match "Stable") { "Stable" } else { "Fast" }
+    $selConfig = if ($comboConfig.SelectedItem.Tag -match "Fast") { "Fast" } elseif ($comboConfig.SelectedItem.Tag -match "Custom") { "Custom" } else { "Stable" }
     $selCount = [int]($comboCount.SelectedItem.Tag)
-    @{ AutoStart = [bool]$autoStart; LaunchOnBoot = [bool]$launchOnBoot; LastConfig = $selConfig; SelectedBridge = $comboBridge.SelectedItem.Tag; InstanceCount = $selCount; XrayMode = $global:lastXrayMode; ManualSplit = $global:lastManualSplit; EnableDirect = $global:enableDirect; CustomBridgeLine = $global:customBridgeLine; EnableV2rayChain = $global:enableV2rayChain; V2rayChainJson = $global:v2rayChainJson; EnableOutboundProxy = $global:enableOutboundProxy; OutboundProxyAddress = $global:outboundProxyAddress; OutboundProxyPort = $global:outboundProxyPort; OutboundProxyType = $global:outboundProxyType; OutboundProxyUser = $global:outboundProxyUser; OutboundProxyPass = $global:outboundProxyPass; EnableOutboundAuth = $global:enableOutboundAuth } | ConvertTo-Json -Depth 10 | Set-Content $cfgFile
+    @{ AutoStart = [bool]$autoStart; LaunchOnBoot = [bool]$launchOnBoot; LastConfig = $selConfig; SelectedBridge = $comboBridge.SelectedItem.Tag; InstanceCount = $selCount; XrayMode = $global:lastXrayMode; ManualSplit = $global:lastManualSplit; AppSplit = $global:lastAppSplit; BlockSplit = $global:lastBlockSplit; EnableDirect = $global:enableDirect; CustomBridgeLine = $global:customBridgeLine; EnableV2rayChain = $global:enableV2rayChain; V2rayChainJson = $global:v2rayChainJson; EnableOutboundProxy = $global:enableOutboundProxy; OutboundProxyAddress = $global:outboundProxyAddress; OutboundProxyPort = $global:outboundProxyPort; OutboundProxyType = $global:outboundProxyType; OutboundProxyUser = $global:outboundProxyUser; OutboundProxyPass = $global:outboundProxyPass; EnableOutboundAuth = $global:enableOutboundAuth; EnableTorDoh = [bool]$global:enableTorDoh; TorDohUrl = $global:torDohUrl; EnableUpstreamDoh = [bool]$global:enableUpstreamDoh; UpstreamDohUrl = $global:upstreamDohUrl; CustomExitCountry = $global:customExitCountry; MinimizeToTray = [bool]$global:minimizeToTray; EnableAdBlock = [bool]$global:enableAdBlock } | ConvertTo-Json -Depth 10 | Set-Content $cfgFile
 }
 
 function Write-XrayConfig {
     $rules = @( @{ type="field"; ip=@("127.0.0.0/8", "::1", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"); outboundTag="direct" } )
+    
+    # 1. Rebuild Blackhole routing rules based on active AdBlock or Custom rules
+    $blockDomains = @()
+    if ($global:enableAdBlock) {
+        $blockDomains += @("geosite:category-ads-all", "domain:analytics.google.com", "domain:google-analytics.com")
+    }
+    if ($global:enableDirect -and -not [string]::IsNullOrWhiteSpace($global:lastBlockSplit)) {
+        $customBlocks = $global:lastBlockSplit.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
+        foreach ($bDomain in $customBlocks) { $blockDomains += "domain:$bDomain" }
+    }
+    if ($blockDomains.Count -gt 0) {
+        $rules += @{ type="field"; domain=$blockDomains; outboundTag="block" }
+    }
+    
+    # 2. Rebuild Domain Split Tunneling array (Proxy Mode only)
     $domains = @(); $ips = @()
-    if ($global:enableDirect -and $global:lastManualSplit -ne "") {
+    if ($global:enableDirect -and $global:lastXrayMode -ne "VPN Mode" -and $global:lastManualSplit -ne "") {
         $list = $global:lastManualSplit.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
-        foreach ($item in $list) { if ($item -match "[a-zA-Z]") { $domains += $item } else { $ips += $item } }
+        foreach ($item in $list) { 
+            if ($item -match "[a-zA-Z]") { $domains += "domain:$item" } else { $ips += $item } 
+        }
         if ($domains.Count -gt 0) { $rules += @{ type="field"; domain=$domains; outboundTag="direct" } }
         if ($ips.Count -gt 0) { $rules += @{ type="field"; ip=$ips; outboundTag="direct" } }
     }
+    
     $rules += @{ type="field"; network="tcp,udp"; outboundTag="proxy" }
     $inboundArr = @( @{ listen="0.0.0.0"; port=10818; protocol="mixed"; settings=@{ udp=$true }; sniffing=@{ enabled=$true; destOverride=@("http","tls","quic","fakedns") } } )
     
@@ -625,46 +1540,108 @@ function Write-XrayConfig {
         } catch { $outbounds += @{ tag="proxy"; protocol="socks"; settings=@{ servers=@(@{ address="127.0.0.1"; port=10800 }) } } }
     } else { $outbounds += @{ tag="proxy"; protocol="socks"; settings=@{ servers=@(@{ address="127.0.0.1"; port=10800 }) } } }
     
+    # Inject Blackhole sinkhole protocol if rules demand blocking filters
+    if ($global:enableAdBlock -or ($global:enableDirect -and -not [string]::IsNullOrWhiteSpace($global:lastBlockSplit))) {
+        $outbounds += @{ tag="block"; protocol="blackhole"; settings=@{} }
+    }
+    
     $outbounds += @{ tag="direct"; protocol="freedom"; settings=@{} }
+    
     $config = @{ log = @{ logLevel="info"; access="access.log"; error="error.log" }; inbounds = $inboundArr; outbounds = $outbounds; routing = @{ domainStrategy="AsIs"; rules=$rules } }
+    
+    # Inject Upstream DoH
+    if ($global:enableUpstreamDoh -and -not [string]::IsNullOrWhiteSpace($global:upstreamDohUrl)) {
+        $config.Add("dns", @{ servers = @($global:upstreamDohUrl) })
+    }
+
     $config | ConvertTo-Json -Depth 10 | Set-Content "$xrayDir\config.json"
 }
 
 function Write-SingboxConfig {
-    $domains = @(); $ips = @()
-    if ($global:enableDirect -and $global:lastManualSplit -ne "") {
-        $list = $global:lastManualSplit.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
-        foreach ($item in $list) { if ($item -match "[a-zA-Z]") { $domains += $item } else { $ips += $item } }
+    # Core system proxy engines bypassed from global WFP routing loops
+    $bypassApps = @("tor.exe", "haproxy.exe", "lyrebird.exe", "obfs4proxy.exe", "snowflake-client.exe", "xray.exe", "sing-box.exe")
+    
+    if ($global:enableDirect -and -not [string]::IsNullOrWhiteSpace($global:lastAppSplit)) {
+        $customApps = $global:lastAppSplit.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
+        foreach ($app in $customApps) {
+            $normalizedApp = if ($app -notmatch "\.exe$") { "$app.exe" } else { $app }
+            $bypassApps += $normalizedApp.ToLower()
+        }
     }
 
     $sbRules = @(
+        @{ process_name = $bypassApps; outbound = "direct" }
         @{ action = "sniff" }
         @{ port = @(53); action = "hijack-dns" }
         @{ protocol = "dns"; action = "hijack-dns" }
-        @{ process_name = @("tor.exe", "haproxy.exe", "lyrebird.exe", "obfs4proxy.exe", "snowflake-client.exe", "xray.exe", "sing-box.exe"); outbound = "direct" }
         @{ ip_is_private = $true; outbound = "direct" }
+        
+        @{ network = "udp"; port = @(443); outbound = "block" } 
     )
 
-    if ($domains.Count -gt 0) { $sbRules += @{ domain_suffix = $domains; outbound = "direct" } }
-    if ($ips.Count -gt 0) { 
-        $cidrIps = $ips | ForEach-Object { if ($_ -notmatch "/") { "$_/32" } else { $_ } }
-        $sbRules += @{ ip_cidr = $cidrIps; outbound = "direct" } 
+    if ($global:enableUpstreamDoh -and -not [string]::IsNullOrWhiteSpace($global:upstreamDohUrl)) {
+        if ($global:upstreamDohUrl.StartsWith("https://")) {
+            try {
+                $sbUri = [uri]$global:upstreamDohUrl
+                $sbHost = $sbUri.Host
+                $sbPath = if ($sbUri.AbsolutePath -eq "/") { "/dns-query" } else { $sbUri.PathAndQuery }
+                $dnsServer = @{ tag = "dns_proxy"; type = "https"; server = $sbHost; path = $sbPath; detour = "proxy" }
+            } catch { $dnsServer = @{ tag = "dns_proxy"; type = "tcp"; server = "1.1.1.1"; detour = "proxy" } }
+        } else {
+            $dnsServer = @{ tag = "dns_proxy"; type = "tcp"; server = $global:upstreamDohUrl; detour = "proxy" }
+        }
+    } else {
+        $dnsServer = @{ tag = "dns_proxy"; type = "https"; server = "cloudflare-dns.com"; path = "/dns-query"; detour = "proxy" }
     }
 
     $sbConfig = @{
-        log = @{ level = "warn" }
-        dns = @{ servers = @( @{ tag = "dns_proxy"; server = "1.1.1.1"; type = "tcp"; detour = "proxy" } ); final = "dns_proxy" }
-        inbounds = @( @{ type = "tun"; tag = "tun-in"; interface_name = "singbox_tun"; address = @("172.18.0.1/30"); mtu = 9000; auto_route = $true; strict_route = $true; stack = "gvisor" } )
-        outbounds = @( @{ type = "socks"; tag = "proxy"; server = "127.0.0.1"; server_port = 10818 }, @{ type = "direct"; tag = "direct" } )
-        route = @{ default_domain_resolver = "dns_proxy"; auto_detect_interface = $true; rules = $sbRules; final = "proxy" }
+        log = @{ level = "fatal" } 
+        dns = @{ 
+            servers = @( $dnsServer )
+            final = "dns_proxy" 
+            strategy = "ipv4_only" 
+        }
+        inbounds = @( @{ 
+            type = "tun"
+            tag = "tun-in"
+            interface_name = "singbox_tun"
+            address = @("172.18.0.1/30") 
+            mtu = 9000
+            auto_route = $true
+            strict_route = $true
+            stack = "gvisor" 
+        } )
+        outbounds = @( 
+            @{ type = "socks"; tag = "proxy"; server = "127.0.0.1"; server_port = 10818 }, 
+            @{ type = "direct"; tag = "direct" },
+            @{ type = "block"; tag = "block" } 
+        )
+        route = @{ 
+            auto_detect_interface = $true 
+            rules = $sbRules 
+            final = "proxy" 
+        }
     }
+    
     $sbConfig | ConvertTo-Json -Depth 10 | Set-Content "$sbDir\config.json"
 }
 
 function Set-SystemProxy($enable) {
     $path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
-    if ($enable) { Set-ItemProperty $path -Name "ProxyEnable" -Value 1; Set-ItemProperty $path -Name "ProxyServer" -Value "127.0.0.1:10818" } 
-    else { Set-ItemProperty $path -Name "ProxyEnable" -Value 0 }
+    if ($enable) { 
+        Set-ItemProperty $path -Name "ProxyEnable" -Value 1
+        Set-ItemProperty $path -Name "ProxyServer" -Value "127.0.0.1:10818"
+        
+        $bypassList = "<local>"
+        if ($global:enableDirect -and -not [string]::IsNullOrWhiteSpace($global:lastManualSplit) -and $global:lastXrayMode -eq "Proxy Mode") {
+            $clean = $global:lastManualSplit.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
+            $bypassList = "$($clean -join ';');<local>"
+        }
+        Set-ItemProperty $path -Name "ProxyOverride" -Value $bypassList
+    } 
+    else { 
+        Set-ItemProperty $path -Name "ProxyEnable" -Value 0 
+    }
     [Win32.WinInet]::InternetSetOption([IntPtr]::Zero, 39, [IntPtr]::Zero, 0) | Out-Null
     [Win32.WinInet]::InternetSetOption([IntPtr]::Zero, 37, [IntPtr]::Zero, 0) | Out-Null
 }
@@ -673,6 +1650,8 @@ function Restart-Xray($targetMode) {
     Get-Process sing-box, xray -ErrorAction SilentlyContinue | ForEach-Object { try { if ($null -ne $_.Path -and ($_.Path -eq "$xrayDir\xray.exe" -or $_.Path -eq "$global:baseDir\Data\sing_box\sing-box.exe")) { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue } } catch {} }
     if ($null -ne $global:cmdDebugPid) { Stop-Process -Id $global:cmdDebugPid -Force -ErrorAction SilentlyContinue; $global:cmdDebugPid = $null }
     if ($null -ne $global:cmdDebugPid2) { Stop-Process -Id $global:cmdDebugPid2 -Force -ErrorAction SilentlyContinue; $global:cmdDebugPid2 = $null }
+    if ($null -ne $global:xrayDohPid) { Stop-Process -Id $global:xrayDohPid -Force -ErrorAction SilentlyContinue; $global:xrayDohPid = $null }
+    
     Start-Sleep -Milliseconds 500
     Write-XrayConfig
     if ($script:debugMode) { $p = Start-Process "cmd.exe" -ArgumentList "/c `"title XrayDebug & .\xray.exe run -c config.json || pause`"" -WorkingDirectory $xrayDir -WindowStyle Normal -PassThru; $global:cmdDebugPid = $p.Id } else { Start-Process -FilePath "$xrayDir\xray.exe" -ArgumentList "run -c config.json" -WorkingDirectory $xrayDir -WindowStyle Hidden }
@@ -681,6 +1660,18 @@ function Restart-Xray($targetMode) {
         if ($script:debugMode) { $p2 = Start-Process "cmd.exe" -ArgumentList "/c `"title SingBoxDebug & .\sing-box.exe run -c config.json || pause`"" -WorkingDirectory $sbDir -WindowStyle Normal -PassThru; $global:cmdDebugPid2 = $p2.Id } else { Start-Process -FilePath "$sbDir\sing-box.exe" -ArgumentList "run -c config.json" -WorkingDirectory $sbDir -WindowStyle Hidden }
     } elseif ($targetMode -eq "Proxy Mode") { Set-SystemProxy $true }
     if ($targetMode -ne "Proxy Mode") { Set-SystemProxy $false }
+
+    if ($global:isConnected) {
+        if ($null -ne $global:pingTimer) { $global:pingTimer.Stop() } 
+        
+        $global:pingTimer = New-Object System.Windows.Threading.DispatcherTimer
+        $global:pingTimer.Interval = [TimeSpan]::FromSeconds(1.5)
+        $global:pingTimer.add_Tick({
+            $global:pingTimer.Stop() 
+            Start-GeoPing
+        })
+        $global:pingTimer.Start()
+    }
 }
 
 function Format-HAProxyConfig($activeCount) {
@@ -698,10 +1689,149 @@ function Format-HAProxyConfig($activeCount) {
     }
 }
 
+# --- REAL-TIME PHYSICS ACCELERATED WAVE ENGINE WITH VELOCITY SUSTAIN ---
+function Update-WaveAnimation {
+    param([string]$State)
+    
+    if ($null -eq $wavePath1 -or $null -eq $waveTrans1 -or $null -eq $waveTrans2) { return }
+    
+    # 1. Initialize background rendering clock on startup
+    if ($null -eq $global:wavePhysicsTimer) {
+        $global:waveX1 = 0.0
+        $global:waveX2 = -75.0
+        $global:waveCurrentSpeed1 = 0.4
+        $global:waveCurrentSpeed2 = 0.5
+        $global:waveTargetSpeed1 = 0.4
+        $global:waveTargetSpeed2 = 0.5
+        
+        $global:wavePhysicsTimer = New-Object System.Windows.Threading.DispatcherTimer
+        $global:wavePhysicsTimer.Interval = [TimeSpan]::FromMilliseconds(25)
+        $global:wavePhysicsTimer.add_Tick({
+            # Smooth Inertia Easing: Closes 8% of the speed gap every single frame
+            $global:waveCurrentSpeed1 += ($global:waveTargetSpeed1 - $global:waveCurrentSpeed1) * 0.08
+            $global:waveCurrentSpeed2 += ($global:waveTargetSpeed2 - $global:waveCurrentSpeed2) * 0.08
+            
+            $global:waveX1 -= $global:waveCurrentSpeed1
+            $global:waveX2 -= $global:waveCurrentSpeed2
+            
+            if ($global:waveX1 -le -150.0) { $global:waveX1 += 150.0 }
+            if ($global:waveX2 -le -225.0) { $global:waveX2 += 150.0 }
+            
+            $waveTrans1.X = $global:waveX1
+            $waveTrans2.X = $global:waveX2
+        })
+        $global:wavePhysicsTimer.Start()
+    }
+    
+    $colorHex = "#718096"
+    if ($null -ne $global:waveHoldTimer) { $global:waveHoldTimer.Stop() }
+    
+    # 2. Adjust speeds and hold thresholds per state
+    switch ($State) {
+        "Idle" {
+            $colorHex = "#718096"
+            $global:waveTargetSpeed1 = 0.4
+            $global:waveTargetSpeed2 = 0.5
+        }
+        "Connecting" {
+            $colorHex = "#B78854"
+            $global:waveCurrentSpeed1 = 5.5
+            $global:waveCurrentSpeed2 = 6.0
+            $global:waveTargetSpeed1 = 5.5 
+            $global:waveTargetSpeed2 = 6.0
+            
+            $global:waveHoldTimer = New-Object System.Windows.Threading.DispatcherTimer
+            $global:waveHoldTimer.Interval = [TimeSpan]::FromMilliseconds(600) 
+            $global:waveHoldTimer.add_Tick({
+                $global:waveHoldTimer.Stop()
+                $global:waveTargetSpeed1 = 1.1
+                $global:waveTargetSpeed2 = 1.3
+            }.GetNewClosure())
+            $global:waveHoldTimer.Start()
+        }
+        "Connected" {
+            $colorHex = "#68D391"
+            $global:waveCurrentSpeed1 = 5.5
+            $global:waveCurrentSpeed2 = 6.0
+            $global:waveTargetSpeed1 = 5.5
+            $global:waveTargetSpeed2 = 6.0
+            
+            $global:waveHoldTimer = New-Object System.Windows.Threading.DispatcherTimer
+            $global:waveHoldTimer.Interval = [TimeSpan]::FromMilliseconds(600)
+            $global:waveHoldTimer.add_Tick({
+                $global:waveHoldTimer.Stop()
+                $global:waveTargetSpeed1 = 0.4
+                $global:waveTargetSpeed2 = 0.5
+            }.GetNewClosure())
+            $global:waveHoldTimer.Start()
+        }
+    }
+    
+    # 3. Smooth Color Cross-Fades
+    try {
+        $targetColor = [System.Windows.Media.ColorConverter]::ConvertFromString($colorHex)
+        $colorAnim = New-Object System.Windows.Media.Animation.ColorAnimation
+        $colorAnim.To = $targetColor
+        $colorAnim.Duration = New-Object System.Windows.Duration([TimeSpan]::FromSeconds(0.8))
+        
+        $brush1 = New-Object System.Windows.Media.SolidColorBrush -ArgumentList ([System.Windows.Media.Colors]::Gray)
+        $brush2 = New-Object System.Windows.Media.SolidColorBrush -ArgumentList ([System.Windows.Media.Colors]::Gray)
+        $brush1.Opacity = 0.25; $brush2.Opacity = 0.15
+        $wavePath1.Fill = $brush1; $wavePath2.Fill = $brush2
+        
+        $brush1.BeginAnimation([System.Windows.Media.SolidColorBrush]::ColorProperty, $colorAnim)
+        $brush2.BeginAnimation([System.Windows.Media.SolidColorBrush]::ColorProperty, $colorAnim)
+    } catch {}
+}
+
+# --- ASYNC GEO-IP TRACKER ---
+function Start-GeoPing {
+    $lblGeoData.Text = "Loc: TRACING...`nPing: --"
+    $lblGeoData.Foreground = "#68D391" 
+    
+    $geoClient = New-Object System.Net.WebClient
+    $geoClient.Proxy = New-Object System.Net.WebProxy("http://127.0.0.1:10818")
+    
+    $global:geoSw = [System.Diagnostics.Stopwatch]::StartNew()
+    
+    $geoClient.Add_DownloadStringCompleted({
+        param($sender, $e)
+        $global:geoSw.Stop()
+        $pingMs = $global:geoSw.ElapsedMilliseconds
+        
+        $form.Dispatcher.Invoke([System.Action]{
+            if ($global:isConnected) {
+                if (-not $e.Cancelled -and $e.Error -eq $null) {
+                    try {
+                        $data = $e.Result | ConvertFrom-Json
+                        $geoStr = ""
+                        
+                        $selConfig = if ($comboConfig.SelectedItem.Tag -match "Fast") { "Fast" } elseif ($comboConfig.SelectedItem.Tag -match "Custom") { "Custom" } else { "Stable" }
+                        if ($selConfig -eq "Custom" -or $global:enableV2rayChain) {
+                            $geoStr = $data.country
+                        } else {
+                            $cMap = @{ "NA"="NORTH AMERICA"; "EU"="EUROPE"; "AS"="ASIA"; "SA"="SOUTH AMERICA"; "AF"="AFRICA"; "OC"="OCEANIA"; "AN"="ANTARCTICA" }
+                            $geoStr = $cMap[$data.continent_code]
+                            if (-not $geoStr) { $geoStr = $data.continent_code }
+                        }
+                        
+                        $lblGeoData.Text = "Loc: $($geoStr.ToUpper())`nPing: $($pingMs)ms"
+                        $lblGeoData.Foreground = "#68D391" 
+                    } catch { $lblGeoData.Text = "Loc: ERROR`nPing: --"; $lblGeoData.Foreground = "#8B4A4A" }
+                } else { $lblGeoData.Text = "Loc: TIMEOUT`nPing: --"; $lblGeoData.Foreground = "#8B4A4A" }
+            }
+        })
+        $sender.Dispose()
+    })
+    
+    try { $geoClient.DownloadStringAsync([uri]"https://get.geojs.io/v1/ip/geo.json") } catch { $lblGeoData.Text = "Loc: ERROR`nPing: --"; $lblGeoData.Foreground = "#8B4A4A" }
+}
+
 function Reset-ButtonText { 
     $btnActionMainText.Text = "CONNECT"
-    $btnActionSubText.Text = "(click to start)"
-    if ($global:isConnected) { $btnActionMainText.Foreground = "#68D391"; $btnActionSubText.Foreground = "#68D391" } else { $btnActionMainText.Foreground = "#E2E8F0"; $btnActionSubText.Foreground = "#E2E8F0" }
+    $btnActionSubText.Text = ""
+    $btnActionMainText.Foreground = "#E2E8F0"
+    Update-WaveAnimation -State "Idle"
 }
 
 function Stop-AllEngines($isClosing = $false) {
@@ -711,6 +1841,7 @@ function Stop-AllEngines($isClosing = $false) {
     Get-Process tor, haproxy, xray, sing-box -ErrorAction SilentlyContinue | ForEach-Object { try { $p = $_.Path; if ($null -ne $p -and ($p -eq "$xrayDir\xray.exe" -or $p -eq "$haPath\haproxy.exe" -or $p -eq "$global:baseDir\Data\sing_box\sing-box.exe" -or $p -match "Data\\Tors\\Tor")) { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue } } catch {} }
     if ($null -ne $global:cmdDebugPid) { Stop-Process -Id $global:cmdDebugPid -Force -ErrorAction SilentlyContinue; $global:cmdDebugPid = $null }
     if ($null -ne $global:cmdDebugPid2) { Stop-Process -Id $global:cmdDebugPid2 -Force -ErrorAction SilentlyContinue; $global:cmdDebugPid2 = $null }
+    if ($null -ne $global:xrayDohPid) { Stop-Process -Id $global:xrayDohPid -Force -ErrorAction SilentlyContinue; $global:xrayDohPid = $null }
     $global:isConnected = $false; $global:lastTotalBytes = 0; $global:sessionDataBytes = 0
     
     if (-not $isClosing) {
@@ -720,6 +1851,8 @@ function Stop-AllEngines($isClosing = $false) {
         $lblSocksDataIPs.Text = "Waiting for connection..."
         $lblSocksDataTags.Text = ""
         $lblStatsData.Text = "Speed: 0 KB/s`nTotal: 0 MB"
+        $lblGeoData.Text = "Loc: --`nPing: --"
+        $lblGeoData.Foreground = "#68D391"
     }
 }
 
@@ -727,8 +1860,9 @@ function Start-Engines {
     try {
         if (Get-Process tor -ErrorAction SilentlyContinue) { $btnActionSubText.Text = "Clearing old engines..."; DoEvents; Stop-AllEngines; Start-Sleep -Seconds 1 }
         $global:abortBoot = $false; $selBridge = $comboBridge.SelectedItem.Tag
-        $selConfig = if ($comboConfig.SelectedItem.Tag -match "Stable") { "Stable" } else { "Fast" }; $selCount = [int]($comboCount.SelectedItem.Tag)
-        $mode = $global:lastXrayMode; $cfgFileTarget = if ($selConfig -eq "Stable") { "torrc" } else { "torrc2" }
+        $selConfig = if ($comboConfig.SelectedItem.Tag -match "Fast") { "Fast" } elseif ($comboConfig.SelectedItem.Tag -match "Custom") { "Custom" } else { "Stable" }
+        $selCount = [int]($comboCount.SelectedItem.Tag)
+        $mode = $global:lastXrayMode; $cfgFileTarget = "torrc"
 
         # Pre-clean logs so the UI displays correctly during boot
         for ($i=1; $i -le 8; $i++) {
@@ -745,13 +1879,20 @@ function Start-Engines {
         Save-Config
         $winStyle = if ($script:debugMode) { "Normal" } else { "Hidden" }
         
-        $btnActionMainText.Text = "CONNECTING..."
-        $btnActionMainText.Foreground = "#F6AD55"; $btnActionSubText.Foreground = "#F6AD55"
+        $btnActionMainText.Text = "CONNECTING"
+        Update-WaveAnimation -State "Connecting"
+        $btnActionMainText.Foreground = "#F6AD55"; $btnActionSubText.Foreground = "#B78854"
         Format-HAProxyConfig $selCount; $dynamicWait = 16 - $selCount
+
+        if ($global:enableTorDoh -and -not $global:enableOutboundProxy) {
+            Write-TorOutboundDohConfig
+            $pDoH = Start-Process -FilePath "$xrayDir\xray.exe" -ArgumentList "run -c tor-doh.json" -WorkingDirectory $xrayDir -WindowStyle Hidden -PassThru
+            $global:xrayDohPid = $pDoH.Id
+        }
         
         for ($i=1; $i -le $selCount; $i++) {
             if ($global:abortBoot) { break } 
-            $btnActionSubText.Text = "Booting Tor $i of $selCount... (click to abort)"
+            $btnActionSubText.Text = "Booting Tor $i of $selCount"
             DoEvents
             
             $path = "$global:baseDir\Data\Tors\Tor$i"
@@ -759,11 +1900,27 @@ function Start-Engines {
                 $c = @(Get-Content "$path\$cfgFileTarget"); $cleanConfig = @()
                 foreach ($line in $c) {
                     if ($line -match "^# --- MANAGED BRIDGES ---") { break }
-                    if ($line -notmatch "^UseBridges" -and $line -notmatch "^ClientTransportPlugin" -and $line -notmatch "^Bridge" -and $line -notmatch "^HTTPSProxy" -and $line -notmatch "^Socks5Proxy" -and $line -notmatch "^Socks5ProxyUsername" -and $line -notmatch "^Socks5ProxyPassword" -and $line -notmatch "^HTTPSProxyAuthenticator" -and $line -notmatch "^Log notice file") {
+                    if ($line -notmatch "^UseBridges" -and $line -notmatch "^ClientTransportPlugin" -and $line -notmatch "^Bridge" -and $line -notmatch "^HTTPSProxy" -and $line -notmatch "^Socks5Proxy" -and $line -notmatch "^Socks5ProxyUsername" -and $line -notmatch "^Socks5ProxyPassword" -and $line -notmatch "^HTTPSProxyAuthenticator" -and $line -notmatch "^Log notice file" -and $line -notmatch "^MaxCircuitDirtiness" -and $line -notmatch "^ExitNodes" -and $line -notmatch "^StrictNodes" -and $line -notmatch "^# --- DYNAMIC ROUTING ---") {
                         if ($line.Trim() -ne "") { $cleanConfig += $line.Trim() }
                     }
                 }
-                $cleanConfig += ""; $cleanConfig += "# --- MANAGED BRIDGES ---"
+                
+                $cleanConfig += ""
+                $cleanConfig += "# --- DYNAMIC ROUTING ---"
+                if ($selConfig -eq "Fast") {
+                    $cleanConfig += "MaxCircuitDirtiness 600"
+                    $cleanConfig += "ExitNodes {de},{nl},{ch}"
+                    $cleanConfig += "StrictNodes 1"
+                } elseif ($selConfig -eq "Custom" -and -not [string]::IsNullOrWhiteSpace($global:customExitCountry)) {
+                    $cleanConfig += "ExitNodes {$($global:customExitCountry)}"
+                    $cleanConfig += "StrictNodes 1"
+                } else {
+                    $cleanConfig += "ExitNodes {de},{fr},{nl},{uk},{se},{ch}"
+                    $cleanConfig += "StrictNodes 0"
+                }
+
+                $cleanConfig += ""
+                $cleanConfig += "# --- MANAGED BRIDGES ---"
                 $cleanConfig += "Log notice file tor.log"
                 
                 if ($global:enableOutboundProxy -and -not [string]::IsNullOrWhiteSpace($global:outboundProxyAddress) -and -not [string]::IsNullOrWhiteSpace($global:outboundProxyPort)) {
@@ -774,9 +1931,11 @@ function Start-Engines {
                         $cleanConfig += "HTTPSProxy $($global:outboundProxyAddress):$global:outboundProxyPort"
                         if ($global:enableOutboundAuth -and -not [string]::IsNullOrWhiteSpace($global:outboundProxyUser) -and -not [string]::IsNullOrWhiteSpace($global:outboundProxyPass)) { $cleanConfig += "HTTPSProxyAuthenticator $($global:outboundProxyUser):$($global:outboundProxyPass)" }
                     }
+                } elseif ($global:enableTorDoh) {
+                    $cleanConfig += "Socks5Proxy 127.0.0.1:10820"
                 }
 
-                if ($selBridge -eq "Custom" -and $global:customBridgeLine -ne "") { 
+               if ($selBridge -eq "Custom" -and $global:customBridgeLine -ne "") { 
                     $cleanConfig += "UseBridges 1"; $cleanConfig += "ClientTransportPlugin meek_lite,obfs2,obfs3,obfs4,scramblesuit,webtunnel,snowflake exec ..\..\PluggableTransports\lyrebird.exe"
                     $customLines = $global:customBridgeLine.Split("`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" -and $_ -notmatch "^ClientTransportPlugin" }
                     foreach ($cl in $customLines) { if ($cl -notmatch "^Bridge\s") { $cleanConfig += "Bridge $cl" } else { $cleanConfig += $cl } }
@@ -793,7 +1952,7 @@ function Start-Engines {
         }
         
         if (-not $global:abortBoot) {
-            $btnActionSubText.Text = "Booting Core Engines... (click to abort)"; DoEvents
+            $btnActionSubText.Text = "Booting Core Engines"; DoEvents
             
             Remove-Item "$xrayDir\access.log" -ErrorAction SilentlyContinue
             Remove-Item "$xrayDir\error.log" -ErrorAction SilentlyContinue
@@ -807,9 +1966,11 @@ function Start-Engines {
 
             $global:isConnected = $true
             $btnActionMainText.Text = "CONNECTED"
-            $btnActionSubText.Text = "(click to disconnect)"
+            $btnActionSubText.Text = ""
             $btnActionMainText.Foreground = "#68D391"
-            $btnActionSubText.Foreground = "#68D391"
+            
+            Start-GeoPing 
+            Update-WaveAnimation -State "Connected"
         } else { Reset-ButtonText }
     } catch {
         [System.Windows.Forms.MessageBox]::Show("A startup error occurred:`n" + $_.Exception.Message, "Error", 0, 16)
@@ -880,7 +2041,7 @@ function Update-BootShortcut {
     $taskName = "TorMultiplexer_AutoStart"
     if ($script:launchOnBoot) {
         try { 
-            $action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "`"$global:baseDir\Launch Multiplexer.vbs`"" -WorkingDirectory $global:baseDir
+            $action = New-ScheduledTaskAction -Execute "$global:baseDir\Launch Multiplexer.exe" -WorkingDirectory $global:baseDir
             $trigger = New-ScheduledTaskTrigger -AtLogOn
             $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
             $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit 0
@@ -938,14 +2099,15 @@ $statsTimer.Start()
 
 # --- WINDOW SIZING & ANIMATION STATE MACHINE ---
 function Update-WindowSize {
-    $targetW = if ($script:isLogsOpen) { 905.0 } else { 605.0 }
-    $targetH = if ($script:isAdvancedOpen) { 480.0 } else { 295.0 }
+    $targetW = if ($script:isLogsOpen) { 913.0 } else { 605.0 }
+    $targetH = if ($script:isAdvancedOpen) { 547.0 } else { 295.0 }
     
     $advOpac = if ($script:isAdvancedOpen) { 1.0 } else { 0.0 }
     $logOpac = if ($script:isLogsOpen) { 1.0 } else { 0.0 }
-    $panelTop = if ($script:isAdvancedOpen) { 365.0 } else { 180.0 }
-    $logsH = if ($script:isAdvancedOpen) { 410.0 } else { 225.0 }
-    $xrayH = if ($script:isAdvancedOpen) { 260.0 } else { 75.0 }
+    
+    $panelTop = if ($script:isAdvancedOpen) { 432.0 } else { 180.0 }
+    $logsH = if ($script:isAdvancedOpen) { 477.0 } else { 225.0 }
+    $xrayH = if ($script:isAdvancedOpen) { 327.0 } else { 75.0 }
 
     if ($script:isAdvancedOpen) { $AdvancedCanvas.Visibility = "Visible" }
     if ($script:isLogsOpen) { 
@@ -966,8 +2128,7 @@ function Update-WindowSize {
     $LogsCanvas.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $logFade)
 
     $slideAnim = New-Object System.Windows.Media.Animation.DoubleAnimation($panelTop, (New-Object TimeSpan 0,0,0,0,300))
-    $SocksPanel.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty, $slideAnim)
-    $StatsPanel.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty, $slideAnim)
+    $UnifiedPanel.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty, $slideAnim)
 
     $logsHeightAnim = New-Object System.Windows.Media.Animation.DoubleAnimation($logsH, (New-Object TimeSpan 0,0,0,0,300))
     $logBorder.BeginAnimation([System.Windows.FrameworkElement]::HeightProperty, $logsHeightAnim)
@@ -1054,16 +2215,115 @@ $logTimer.add_Tick({
         }
     } catch {}
 })
+# --- LOG AUTO-CLEANER (2 HOURS) ---
+$logClearTimer = New-Object System.Windows.Threading.DispatcherTimer
+$logClearTimer.Interval = [TimeSpan]::FromHours(2)
+$logClearTimer.add_Tick({
+    try {
+        if (Test-Path "$xrayDir\access.log") { 
+            $fs = New-Object System.IO.FileStream("$xrayDir\access.log", [System.IO.FileMode]::Truncate, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
+            $fs.Close()
+        }
+        if (Test-Path "$xrayDir\error.log") { 
+            $fs = New-Object System.IO.FileStream("$xrayDir\error.log", [System.IO.FileMode]::Truncate, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
+            $fs.Close()
+        }
+    } catch {
+        Clear-Content "$xrayDir\access.log" -ErrorAction SilentlyContinue
+        Clear-Content "$xrayDir\error.log" -ErrorAction SilentlyContinue
+    }
+})
+$logClearTimer.Start()
 
 # --- EVENT BINDINGS ---
+# --- SYSTEM TRAY ICON ENGINE ---
+if (Test-Path "$global:baseDir\icon.ico") {
+    $global:sysTrayIcon = New-Object System.Windows.Forms.NotifyIcon
+    $global:sysTrayIcon.Icon = New-Object System.Drawing.Icon("$global:baseDir\icon.ico")
+    $global:sysTrayIcon.Text = "Tor Multiplexer"
+    $global:sysTrayIcon.Visible = $true
+
+    # Double-click the tray icon to pop the window back up safely
+    $global:sysTrayIcon.add_DoubleClick({
+        $form.Dispatcher.Invoke([System.Action]{
+            $form.ShowInTaskbar = $true
+            $form.WindowState = [System.Windows.WindowState]::Normal
+            $form.Activate() | Out-Null
+        })
+    })
+
+    # Create a clean Right-Click Menu for the tray icon
+    $trayMenu = New-Object System.Windows.Forms.ContextMenuStrip
+    $menuShow = $trayMenu.Items.Add("Show Window")
+    $menuExit = $trayMenu.Items.Add("Exit Application")
+
+    # Right-click -> Show Window action
+    $menuShow.add_Click({
+        $form.Dispatcher.Invoke([System.Action]{
+            $form.ShowInTaskbar = $true
+            $form.WindowState = [System.Windows.WindowState]::Normal
+            $form.Activate() | Out-Null
+        })
+    })
+
+    # Right-click -> Exit Application action
+    $menuExit.add_Click({
+        $form.Dispatcher.Invoke([System.Action]{
+            $form.Close()
+        })
+    })
+
+    $global:sysTrayIcon.ContextMenuStrip = $trayMenu
+}
+
+# --- MINIMIZE TO TRAY HANDLER ---
+$form.add_StateChanged({
+    if ($form.WindowState -eq [System.Windows.WindowState]::Minimized) {
+        if ($global:minimizeToTray) {
+            # Stealth mode: Remove from taskbar entirely
+            $form.ShowInTaskbar = $false
+        } else {
+            # Normal mode: Force it to stay visible on the windows taskbar
+            $form.ShowInTaskbar = $true
+        }
+    }
+})
+
+# --- EVENT BINDINGS FOR THE TOGGLE ---
+$btnTrayTog.add_Click({
+    $global:minimizeToTray = -not $global:minimizeToTray
+    Set-WpfToggleState $btnTrayTog $global:minimizeToTray
+    Save-Config
+})
+
+$btnTrayLbl.add_Click({ $btnTrayTog.RaiseEvent((New-Object System.Windows.RoutedEventArgs([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent))) })
 $comboBridge.add_SelectionChanged({
     if ($comboBridge.SelectedItem.Tag -eq "Custom") { if (-not (Show-CustomBridgeDialog)) { Set-ComboSelectedTag $comboBridge $global:previousBridge } else { $global:previousBridge = "Custom" } } else { $global:previousBridge = $comboBridge.SelectedItem.Tag }
     Save-Config
 })
-$comboConfig.add_SelectionChanged({ Save-Config })
+
+$btnStatsPanel.add_Click({
+    if ($global:isConnected) {
+        Start-GeoPing
+    }
+})
+
+$comboConfig.add_SelectionChanged({ 
+    if ($comboConfig.SelectedItem.Tag -eq "Custom") { 
+        if (-not (Show-ExitNodeDialog)) { 
+            Set-ComboSelectedTag $comboConfig $global:previousConfig 
+        } else { 
+            $global:previousConfig = "Custom" 
+        } 
+    } else { 
+        $global:previousConfig = $comboConfig.SelectedItem.Tag 
+    }
+    Save-Config 
+})
+
 $comboCount.add_SelectionChanged({ Save-Config })
 
-$btnAction.add_Click({ if ($global:isConnected -or $btnActionMainText.Text -eq "CONNECTING...") { Stop-AllEngines } else { Start-Engines } })
+$btnAction.add_Click({ if ($global:isConnected -or $btnActionMainText.Text -eq "CONNECTING") { Stop-AllEngines } else { Start-Engines } })
 $btnUpdate.add_Click({ Update-Application })
 
 $btnDesktop.add_Click({
@@ -1072,12 +2332,16 @@ $btnDesktop.add_Click({
     try {
         $WshShell = New-Object -ComObject WScript.Shell
         $Shortcut = $WshShell.CreateShortcut($shortcutPath)
-        $Shortcut.TargetPath = Join-Path $global:baseDir "Launch Multiplexer.vbs"
+        $Shortcut.TargetPath = Join-Path $global:baseDir "Launch Multiplexer.exe"
         $Shortcut.WorkingDirectory = $global:baseDir
         $Shortcut.Save()
-        [System.Windows.Forms.MessageBox]::Show("Desktop shortcut created successfully!", "Success", 0, 64)
-    } catch { [System.Windows.Forms.MessageBox]::Show("Failed to create Desktop shortcut.`n" + $_.Exception.Message, "Error", 0, 16) }
+        
+        [System.Windows.Forms.MessageBox]::Show("Desktop shortcut created successfully!", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+    } catch { 
+        [System.Windows.Forms.MessageBox]::Show("Failed to create Desktop shortcut.`n" + $_.Exception.Message, "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null 
+    }
 })
+
 
 $btnGithub.add_Click({ Start-Process "https://github.com/RichTiTAN/Tor-Multiplexer" })
 $btnTelegram.add_Click({ Start-Process "https://t.me/itsTitanVPN" })
@@ -1086,7 +2350,7 @@ $btnAutoStartTog.add_Click({ $script:autoStart = -not $script:autoStart; Set-Wpf
 $btnAutoStartLbl.add_Click({ $btnAutoStartTog.RaiseEvent((New-Object System.Windows.RoutedEventArgs([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent))) })
 
 $btnDirectTog.add_Click({ $global:enableDirect = -not $global:enableDirect; Set-WpfToggleState $btnDirectTog $global:enableDirect; Save-Config; if ($global:isConnected) { Restart-Xray $global:lastXrayMode } })
-$btnDirectConfig.add_Click({ Show-DirectRulesDialog | Out-Null })
+$btnDirectConfig.add_Click({ if (Show-DirectRulesDialog) { Save-Config; if ($global:isConnected) { Restart-Xray $global:lastXrayMode } } })
 
 $btnV2rayTog.add_Click({
     $newState = -not $global:enableV2rayChain
@@ -1104,6 +2368,20 @@ $btnOutboundTog.add_Click({
     Set-WpfToggleState $btnOutboundTog $global:enableOutboundProxy; Save-Config
 })
 $btnOutboundConfig.add_Click({ Show-OutboundProxyDialog | Out-Null })
+
+$btnDohTog.add_Click({
+    if ($global:isConnected) {
+        [System.Windows.Forms.MessageBox]::Show("You cannot change DNS rules while connected. Please disconnect first.", "Action Denied", 0, 48)
+        return
+    }
+    if ($global:enableTorDoh -or $global:enableUpstreamDoh) {
+        $global:enableTorDoh = $false; $global:enableUpstreamDoh = $false
+        Set-WpfToggleState $btnDohTog $false; Save-Config; Evaluate-ProxyExclusivity
+    } else {
+        if (-not (Show-DohDialog)) { Set-WpfToggleState $btnDohTog $false } else { Set-WpfToggleState $btnDohTog ($global:enableTorDoh -or $global:enableUpstreamDoh); Save-Config; Evaluate-ProxyExclusivity }
+    }
+})
+$btnDohConfig.add_Click({ Show-DohDialog | Out-Null; Set-WpfToggleState $btnDohTog ($global:enableTorDoh -or $global:enableUpstreamDoh); Save-Config; Evaluate-ProxyExclusivity })
 
 $btnBootTog.add_Click({ $script:launchOnBoot = -not $script:launchOnBoot; Set-WpfToggleState $btnBootTog $script:launchOnBoot; Update-BootShortcut; Save-Config })
 $btnBootLbl.add_Click({ $btnBootTog.RaiseEvent((New-Object System.Windows.RoutedEventArgs([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent))) })
@@ -1125,6 +2403,11 @@ $btnLogsTog.add_Click({
     Update-WindowSize
 })
 $btnLogsLbl.add_Click({ $btnLogsTog.RaiseEvent((New-Object System.Windows.RoutedEventArgs([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent))) })
+$btnCloseLogs.add_Click({
+    if ($script:isLogsOpen) {
+        $btnLogsTog.RaiseEvent((New-Object System.Windows.RoutedEventArgs([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent)))
+    }
+})
 
 $toggleAction = {
     param($mode); if ($global:lastXrayMode -ne $mode) {
@@ -1135,62 +2418,34 @@ $toggleAction = {
 }
 $btnProxyMode.add_Click({ &$toggleAction "Proxy Mode" })
 $btnClearProxy.add_Click({ &$toggleAction "Clear Proxy" })
-$btnVpnMode.add_Click({ if ($global:hasVpnComponents) { &$toggleAction "VPN Mode" } })
+$btnVpnMode.add_Click({ &$toggleAction "VPN Mode" })
 
-$form.add_Closing({ Stop-AllEngines $true })
+$form.add_Closing({ 
+    Stop-AllEngines $true 
+    
+    # Clean up the system tray icon instantly so it disappears on exit
+    if ($global:sysTrayIcon) {
+        $global:sysTrayIcon.Visible = $false
+        $global:sysTrayIcon.Dispose()
+    }
+})
 $form.add_Closed({ [Environment]::Exit(0) })
+
+# --- AD BLOCKER INTERACTION TRIGGERS ---
+$btnAdBlockTog.add_Click({
+    $global:enableAdBlock = -not $global:enableAdBlock
+    Set-WpfToggleState $btnAdBlockTog $global:enableAdBlock
+    Save-Config
+    # Live hot-swap if the proxy core engine is active
+    if ($global:isConnected) { Restart-Xray $global:lastXrayMode }
+})
+$btnAdBlockLbl.add_Click({ $btnAdBlockTog.RaiseEvent((New-Object System.Windows.RoutedEventArgs([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent))) })
 
 # Safe Auto-Boot Timer & Missing Components Dialog
 $form.add_ContentRendered({ 
     if ($global:appInitialized) { return }
     $global:appInitialized = $true
     Check-UpdateSilent 
-
-    if (-not $global:hasVpnComponents -and $isFirstLaunch) {
-        $dlg = New-Object Windows.Forms.Form
-        $dlg.Text = "Missing Components"
-        $dlg.Size = New-Object Drawing.Size(420, 210)
-        $dlg.StartPosition = "CenterParent"
-        $dlg.BackColor = $colorBgHex
-        $dlg.FormBorderStyle = "FixedDialog"
-        $dlg.MaximizeBox = $false
-
-        $lbl = New-Object Windows.Forms.Label
-        $lbl.Text = "You have successfully updated to the latest version!`n`nHowever, your installation is missing a newly added core component (Sing-box). Because of this major upgrade, you must download the full package from GitHub to use VPN Mode."
-        $lbl.ForeColor = $colorTextHex
-        $lbl.Location = "15,15"
-        $lbl.Size = "375, 80"
-        $lbl.Font = New-Object System.Drawing.Font("Segoe UI", 9)
-        
-        $btnGit = New-Object Windows.Forms.Button
-        $btnGit.Text = "Open GitHub"
-        $btnGit.Location = "15, 115"
-        $btnGit.Size = "130, 30"
-        $btnGit.BackColor = $colorBtnHex
-        $btnGit.Foreground = $colorTextHex
-        $btnGit.FlatStyle = "Flat"
-        $btnGit.FlatAppearance.BorderSize = 0
-        $btnGit.TabStop = $false
-        Set-RoundedCorners $btnGit 4
-        $btnGit.Add_Click({ Start-Process "https://github.com/RichTiTAN/Tor-Multiplexer"; $dlg.Close() })
-
-        $btnClose = New-Object Windows.Forms.Button
-        $btnClose.Text = "Continue without VPN"
-        $btnClose.Location = "220, 115"
-        $btnClose.Size = "170, 30"
-        $btnClose.BackColor = $colorBtnHex
-        $btnClose.Foreground = $colorTextHex
-        $btnClose.FlatStyle = "Flat"
-        $btnClose.FlatAppearance.BorderSize = 0
-        $btnClose.TabStop = $false
-        Set-RoundedCorners $btnClose 4
-        $btnClose.Add_Click({ $dlg.Close() })
-
-        $dlg.Controls.AddRange(@($lbl, $btnGit, $btnClose))
-        $dlg.Add_Shown({ $dlg.ActiveControl = $lbl })
-        $dlg.ShowDialog() | Out-Null
-        $dlg.Dispose()
-    }
 
     if ($autoStart -and -not $isFirstLaunch) { 
         $bootTimer = New-Object System.Windows.Threading.DispatcherTimer
@@ -1204,5 +2459,6 @@ $form.add_ContentRendered({
         $bootTimer.Start()
     }
 })
+Update-WaveAnimation -State "Idle"
 
 $form.ShowDialog() | Out-Null
