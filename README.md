@@ -2,16 +2,7 @@
   A windows tool to run multiple tor connections and load balance them with HAProxy with a simple and feature-full UI.
   Tor but faster!
   
-<img width="591" height="287" alt="Screenshot 2026-05-14 212929" src="https://github.com/user-attachments/assets/19250f34-45b6-40bd-88f8-18c433451c84" /> <img width="591" height="441" alt="Screenshot 2026-05-14 222110" src="https://github.com/user-attachments/assets/2ba6bed1-8d60-475f-ad02-8ff28b12fde7" /> <img width="897" height="476" alt="Screenshot 2026-05-16 161759" src="https://github.com/user-attachments/assets/9574b9ed-bd6d-4db8-a8d9-77cb0fca1a3c" />
-
-
-
-
-
-
-
-
-
+<img width="594" height="292" alt="Screenshot 2026-05-18 121546" src="https://github.com/user-attachments/assets/860feee4-4593-46ec-a568-f210322623a0" /> <img width="904" height="544" alt="Screenshot 2026-05-18 121600" src="https://github.com/user-attachments/assets/d4e6387d-71f0-437d-bdef-453ed1dc7834" />
 
 
 
@@ -23,7 +14,7 @@
     
   How to use:
 
-!!It is recommended to keep the default settings unless you want to change the bridge type!!
+!!It is recommended to keep the default settings unless you know what you are doing!!
 
 1- Launch the program with "Launch Multiplexer"
 
