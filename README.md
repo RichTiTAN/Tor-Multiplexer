@@ -2,7 +2,8 @@
   A windows tool to run multiple tor connections and load balance them with HAProxy with a simple and feature-full UI.
   Tor but faster!
   
-<img width="594" height="292" alt="Screenshot 2026-05-18 121546" src="https://github.com/user-attachments/assets/860feee4-4593-46ec-a568-f210322623a0" /> <img width="904" height="544" alt="Screenshot 2026-05-18 121600" src="https://github.com/user-attachments/assets/d4e6387d-71f0-437d-bdef-453ed1dc7834" />
+<img width="596" height="341" alt="image" src="https://github.com/user-attachments/assets/7019c25f-4b3a-43fe-add7-3be89aa1c82a" /> <img width="601" height="539" alt="image" src="https://github.com/user-attachments/assets/462a167a-1982-497a-9e71-24aa6eb45bf5" />
+ <img width="912" height="537" alt="image" src="https://github.com/user-attachments/assets/b87e013a-6d1b-4c14-ad6a-b3c9d92f63a8" />
 
 
 
