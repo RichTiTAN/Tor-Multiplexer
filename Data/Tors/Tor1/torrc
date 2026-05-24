@@ -1,0 +1,24 @@
+DataDirectory .\Data
+GeoIPFile .\Data\geoip
+GeoIPv6File .\Data\geoip6
+# --- STABILITY OPTIMIZATIONS ---
+AvoidDiskWrites 1
+LearnCircuitBuildTimeout 0
+# --- ROUTING ---
+HTTPTunnelPort 127.0.0.1:8119
+SocksPort 127.0.0.1:9051
+# --- BRIDGES ---
+
+# --- DYNAMIC ROUTING ---
+CircuitBuildTimeout 10
+KeepalivePeriod 60
+NewCircuitPeriod 120
+HardwareAccel 1
+ExitNodes {nl},{de},{it},{is},{fi},{au},{nz},{ch},{hk},{ae},{us}
+StrictNodes 0
+
+# --- MANAGED BRIDGES ---
+Log notice file tor.log
+UseBridges 1
+ClientTransportPlugin meek_lite,obfs2,obfs3,obfs4,scramblesuit,webtunnel exec ..\..\PluggableTransports\lyrebird.exe
+Bridge meek_lite 192.0.2.20:80 url=https://1603026938.rsc.cdn77.org front=www.phpmyadmin.net utls=HelloRandomizedALPN
