@@ -1,5 +1,6 @@
 ﻿Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
-# ASSEMBLIES 
+
+# ASSEMBLIES
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName PresentationFramework
@@ -31,149 +32,269 @@ try {
 "@
 } catch {}
 
-# LOCK SCOPE FOR EVENT HANDLERS
-$global:baseDir = Split-Path -Parent -Path $MyInvocation.MyCommand.Definition
-if ([string]::IsNullOrEmpty($global:baseDir)) { $global:baseDir = Get-Location }
-Set-Location $global:baseDir
-
-# PATH HELPER
-function Get-AppPath {
-    param([string]$Path)
-    Join-Path $global:baseDir $Path
-}
-$global:scriptPath = $PSCommandPath
-if ([string]::IsNullOrEmpty($global:scriptPath)) { 
-    $global:scriptPath = Get-AppPath "multiplexer.ps1" 
-}
-
 # SYSTEM PROXY REFRESH API
 if (-not ("Win32.WinInet" -as [type])) {
-    $MethodDefinition = @'
+    Add-Type -MemberDefinition @'
     [DllImport("wininet.dll", SetLastError = true)]
     public static extern bool InternetSetOption(IntPtr hInternet, int dwOption, IntPtr lpBuffer, int lpdwBufferLength);
-'@
-    Add-Type -MemberDefinition $MethodDefinition -Name 'WinInet' -Namespace 'Win32' -PassThru | Out-Null
+'@ -Name 'WinInet' -Namespace 'Win32' -PassThru | Out-Null
 }
 
-# VERSION CONTROL & GLOBALS 
-$global:currentVersion = "5.1.1" 
-$repoRawUrl = "https://raw.githubusercontent.com/RichTiTAN/Tor-Multiplexer/main/multiplexer.ps1"
-$global:forceManualUpdate = $true
+#  LEGACY UPDATE STUBS 
+$global:currentVersion       = "5.1.2" 
+$global:forceManualUpdate    = $true
 $global:minAutoUpdateVersion = "5.1.0"
-$global:abortBoot = $false
-$global:isConnected = $false
-$global:isEngineRunning = $false
-$global:cmdDebugPid = $null 
-$global:cmdDebugPid2 = $null 
-$global:xrayDohPid = $null
-$global:lastTotalBytes = 0
-$global:sessionDataBytes = 0
-$global:sessionStartTime = $null
-$global:appInitialized = $false
-$global:isAdvancedOpen = $false
-$global:isLogsOpen = $false
-$global:ignoreComboChange = $false
-$global:isGeoTracing = $false  # FIX: explicit initialization
 
-# Stats Smoothing Buffer
-$global:speedSamples = @(0, 0, 0, 0, 0)
-$global:minimizeToTray = $false
-$global:enableAdBlock = $false
-$global:lastAppSplit = ""
-$global:lastBlockSplit = ""
+#  CENTRAL APP STATE 
+$App = [ordered]@{
+    # Persisted + path config
+    Config = [ordered]@{
+        currentVersion       = "5.1.2"
+        minAutoUpdateVersion = "5.1.0"
+        repoRawUrl           = "https://raw.githubusercontent.com/RichTiTAN/Tor-Multiplexer/main/multiplexer.ps1"
+        repoReleaseUrl       = "https://github.com/RichTiTAN/Tor-Multiplexer/releases"
+        baseDir              = ""
+        scriptPath           = ""
+        cfgFile              = ""
+        xrayDir              = ""
+        haPath               = ""
+        sbDir                = ""
+        # user preferences (saved to JSON)
+        autoStart            = $true
+        launchOnBoot         = $false
+        debugMode            = $false
+        lastConfig           = "Optimized"
+        lastBridge           = "meek_lite"
+        lastCount            = "6"
+        lastXrayMode         = "Proxy Mode"
+        lastManualSplit      = ""
+        lastAppSplit         = ""
+        lastBlockSplit       = ""
+        enableDirect         = $false
+        customBridgeLine     = ""
+        v2rayChainJson       = ""
+        enableV2rayChain     = $false
+        outboundProxyAddress = ""
+        outboundProxyPort    = ""
+        outboundProxyType    = "SOCKS5"
+        enableOutboundProxy  = $false
+        outboundProxyUser    = ""
+        outboundProxyPass    = ""
+        enableOutboundAuth   = $false
+        enableTorDoh         = $false
+        torDohUrl            = "https://cloudflare-dns.com/dns-query"
+        enableUpstreamDoh    = $false
+        upstreamDohUrl       = "https://cloudflare-dns.com/dns-query"
+        customExitCountry    = "us"
+        minimizeToTray       = $false
+        enableAdBlock        = $false
+    }
+    # Volatile connection / UI state
+    State = [ordered]@{
+        isFirstLaunch     = $true
+        isConnected       = $false
+        isEngineRunning   = $false
+        abortBoot         = $false
+        isGeoTracing      = $false
+        isAdvancedOpen    = $false
+        isLogsOpen        = $false
+        ignoreComboChange = $false
+        appInitialized    = $false
+        previousBridge    = "meek_lite"
+        previousConfig    = "Optimized"
+        lanIp             = "UNKNOWN"
+        sessionStartTime  = $null
+        lastTotalBytes    = 0
+        sessionDataBytes  = 0
+        speedSamples      = @(0, 0, 0, 0, 0)
+        tempProxyType     = "SOCKS5"
+    }
+    # Process handles, timers, async clients
+    Runtime = [ordered]@{
+        cmdDebugPid       = $null
+        cmdDebugPid2      = $null
+        xrayDohPid        = $null
+        isFetchingStats   = $false
+        statsWebClient    = $null
+        statsTimer        = $null
+        wavePhysicsTimer  = $null
+        waveHoldTimer     = $null
+        pingTimer         = $null
+        hideAdvTimer      = $null
+        hideLogTimer      = $null
+        geoSw             = $null
+        sysTrayIcon       = $null
+        waveX1            = 0.0
+        waveX2            = -75.0
+        waveCurrentSpeed1 = 0.4
+        waveCurrentSpeed2 = 0.5
+        waveTargetSpeed1  = 0.4
+        waveTargetSpeed2  = 0.5
+    }
+    # WPF element references + pre-built brushes
+    UI = [ordered]@{
+        form                 = $null
+        brGreen              = $null
+        brGray               = $null
+        brRed                = $null
+        brWhite              = $null
+        brTransparent        = $null
+        brActiveRouting      = $null
+        brInactiveRouting    = $null
+        waveBrush1           = $null
+        waveBrush2           = $null
+        comboBridge          = $null
+        comboConfig          = $null
+        comboCount           = $null
+        btnAction            = $null
+        btnActionMainText    = $null
+        btnActionSubText     = $null
+        wavePath1            = $null
+        wavePath2            = $null
+        waveTrans1           = $null
+        waveTrans2           = $null
+        btnProxyMode         = $null
+        btnVpnMode           = $null
+        vpnToolTip           = $null
+        btnClearProxy        = $null
+        btnAutoStartMain     = $null
+        btnAdvMain           = $null
+        lblSessionTime       = $null
+        btnDirectLbl         = $null
+        btnDirectTog         = $null
+        btnV2rayLbl          = $null
+        btnV2rayTog          = $null
+        btnOutboundLbl       = $null
+        btnOutboundTog       = $null
+        btnDohLbl            = $null
+        btnDohTog            = $null
+        btnAdBlockLbl        = $null
+        btnAdBlockTog        = $null
+        btnBootLbl           = $null
+        btnBootTog           = $null
+        btnDebugLbl          = $null
+        btnDebugTog          = $null
+        btnTrayLbl           = $null
+        btnTrayTog           = $null
+        btnLogsLbl           = $null
+        btnLogsTog           = $null
+        btnDesktop           = $null
+        AdvancedCanvas       = $null
+        AdvancedBorder       = $null
+        LogsCanvas           = $null
+        logBorder            = $null
+        txtXrayLogs          = $null
+        btnCloseLogs         = $null
+        lblTorTitle          = $null
+        logSeparator         = $null
+        lblConnTitle         = $null
+        lblTor1              = $null
+        lblTor2              = $null
+        lblTor3              = $null
+        lblTor4              = $null
+        lblTor5              = $null
+        lblTor6              = $null
+        lblTor7              = $null
+        lblTor8              = $null
+        UnifiedPanel         = $null
+        lblSocksTitle        = $null
+        lblSocksDataIPs      = $null
+        lblSocksDataTags     = $null
+        lblStatsTitle        = $null
+        lblStatsData         = $null
+        lblGeoData           = $null
+        btnStatsPanel        = $null
+        lblTitleText         = $null
+        btnTitleUpdate       = $null
+    }
+}
 
-# CONFIGURATION & PATHS
-$cfgFile = Get-AppPath "multiplexer_settings.json"
-$xrayDir = Get-AppPath "Data\Xray"
-$haPath  = Get-AppPath "Data\HAproxy"
-$sbDir   = Get-AppPath "Data\sing_box"
-$script:autoStart = $true
-$script:launchOnBoot = $false
-$script:debugMode = $false 
-$lastConfig = "Optimized"
-$lastBridge = "meek_lite"
-$lastCount = "6"
-$global:lastXrayMode = "Proxy Mode"
-$global:lastManualSplit = ""
-$global:enableDirect = $false
-$global:customBridgeLine = ""
-$global:v2rayChainJson = ""
-$global:enableV2rayChain = $false
-$global:outboundProxyAddress = ""
-$global:outboundProxyPort = ""
-$global:outboundProxyType = "SOCKS5"
-$global:enableOutboundProxy = $false
-$global:outboundProxyUser = ""
-$global:outboundProxyPass = ""
-$global:enableOutboundAuth = $false
-$global:enableTorDoh = $false
-$global:torDohUrl = "https://cloudflare-dns.com/dns-query"
-$global:enableUpstreamDoh = $false
-$global:upstreamDohUrl = "https://cloudflare-dns.com/dns-query"
-$global:customExitCountry = "us"
-$isFirstLaunch = $true 
+#  PATH SETUP
+$App.Config.baseDir = Split-Path -Parent -Path $MyInvocation.MyCommand.Definition
+if ([string]::IsNullOrEmpty($App.Config.baseDir)) { $App.Config.baseDir = Get-Location }
+Set-Location $App.Config.baseDir
 
-if (Test-Path $cfgFile) {
-    $isFirstLaunch = $false
+function Get-AppPath {
+    param([string]$Path)
+    Join-Path $App.Config.baseDir $Path
+}
+
+$App.Config.scriptPath = $PSCommandPath
+if ([string]::IsNullOrEmpty($App.Config.scriptPath)) { $App.Config.scriptPath = Get-AppPath "multiplexer.ps1" }
+$App.Config.cfgFile    = Get-AppPath "multiplexer_settings.json"
+$App.Config.xrayDir    = Get-AppPath "Data\Xray"
+$App.Config.haPath     = Get-AppPath "Data\HAproxy"
+$App.Config.sbDir      = Get-AppPath "Data\sing_box"
+
+#  LOAD SAVED SETTINGS
+if (Test-Path $App.Config.cfgFile) {
+    $App.State.isFirstLaunch = $false
     try {
-        $s = Get-Content $cfgFile -Raw | ConvertFrom-Json
-        if ($null -ne $s.AutoStart) { $script:autoStart = [bool]$s.AutoStart }
-        if ($null -ne $s.LaunchOnBoot) { $script:launchOnBoot = [bool]$s.LaunchOnBoot }
-        $globalVars = @{
-            "LastConfig" = "lastConfig"; "SelectedBridge" = "lastBridge"; 
-            "InstanceCount" = "lastCount"; "ManualSplit" = "lastManualSplit";
-            "AppSplit" = "lastAppSplit"; "BlockSplit" = "lastBlockSplit";
-            "EnableDirect" = "enableDirect"; "CustomBridgeLine" = "customBridgeLine";
-            "V2rayChainJson" = "v2rayChainJson"; "EnableV2rayChain" = "enableV2rayChain";
-            "EnableOutboundProxy" = "enableOutboundProxy"; "OutboundProxyAddress" = "outboundProxyAddress";
-            "OutboundProxyPort" = "outboundProxyPort"; "OutboundProxyType" = "outboundProxyType";
-            "OutboundProxyUser" = "outboundProxyUser"; "OutboundProxyPass" = "outboundProxyPass";
-            "EnableOutboundAuth" = "enableOutboundAuth"; "EnableTorDoh" = "enableTorDoh";
-            "TorDohUrl" = "torDohUrl"; "EnableUpstreamDoh" = "enableUpstreamDoh";
-            "UpstreamDohUrl" = "upstreamDohUrl"; "CustomExitCountry" = "customExitCountry";
-            "MinimizeToTray" = "minimizeToTray"; "EnableAdBlock" = "enableAdBlock"; "XrayMode" = "lastXrayMode"
+        $s = Get-Content $App.Config.cfgFile -Raw | ConvertFrom-Json
+        if ($null -ne $s.AutoStart)    { $App.Config.autoStart    = [bool]$s.AutoStart }
+        if ($null -ne $s.LaunchOnBoot) { $App.Config.launchOnBoot = [bool]$s.LaunchOnBoot }
+        
+        $cfgMap = @{
+            "LastConfig"           = "lastConfig"
+            "SelectedBridge"       = "lastBridge"
+            "InstanceCount"        = "lastCount"
+            "XrayMode"             = "lastXrayMode"
+            "ManualSplit"          = "lastManualSplit"
+            "AppSplit"             = "lastAppSplit"
+            "BlockSplit"           = "lastBlockSplit"
+            "EnableDirect"         = "enableDirect"
+            "CustomBridgeLine"     = "customBridgeLine"
+            "V2rayChainJson"       = "v2rayChainJson"
+            "EnableV2rayChain"     = "enableV2rayChain"
+            "EnableOutboundProxy"  = "enableOutboundProxy"
+            "OutboundProxyAddress" = "outboundProxyAddress"
+            "OutboundProxyPort"    = "outboundProxyPort"
+            "OutboundProxyType"    = "outboundProxyType"
+            "OutboundProxyUser"    = "outboundProxyUser"
+            "OutboundProxyPass"    = "outboundProxyPass"
+            "EnableOutboundAuth"   = "enableOutboundAuth"
+            "EnableTorDoh"         = "enableTorDoh"
+            "TorDohUrl"            = "torDohUrl"
+            "EnableUpstreamDoh"    = "enableUpstreamDoh"
+            "UpstreamDohUrl"       = "upstreamDohUrl"
+            "CustomExitCountry"    = "customExitCountry"
+            "MinimizeToTray"       = "minimizeToTray"
+            "EnableAdBlock"        = "enableAdBlock"
         }
-        foreach ($key in $globalVars.Keys) {
-            if ($null -ne $s.$key) {
-                Set-Variable -Name $globalVars[$key] -Value $s.$key -Scope Global -Force
-            }
+        
+        foreach ($key in $cfgMap.Keys) {
+            if ($null -ne $s.$key) { $App.Config[$cfgMap[$key]] = $s.$key }
         }
-        if ($lastConfig -eq "Stable" -or $lastConfig -eq "Fast") {
-            $lastConfig = "Optimized"
+        if ($App.Config.lastConfig -eq "Stable" -or $App.Config.lastConfig -eq "Fast") {
+            $App.Config.lastConfig = "Optimized"
         }
     } catch {
         Write-Host "Config Load Error: $($_.Exception.Message)"
     }
 }
 
-$lanIp = "UNKNOWN"
-$ips = [System.Net.Dns]::GetHostAddresses([System.Net.Dns]::GetHostName()) | Where-Object { 
-    $_.AddressFamily -eq 'InterNetwork' -and $_.ToString() -notmatch '^127\.' -and $_.ToString() -notmatch '^169\.254\.' 
-}
-if ($ips) { $lanIp = $ips[0].ToString() }
+# LAN IP
+$_ips = [System.Net.Dns]::GetHostAddresses([System.Net.Dns]::GetHostName()) |
+        Where-Object { $_.AddressFamily -eq 'InterNetwork' -and
+                       $_.ToString() -notmatch '^127\.' -and
+                       $_.ToString() -notmatch '^169\.254\.' }
+if ($_ips) { $App.State.lanIp = $_ips[0].ToString() }
 
-# THEME BRUSHES FOR WPF & WINFORMS MODALS
-$bc = New-Object System.Windows.Media.BrushConverter
-$brushActiveRouting = $bc.ConvertFromString("#80646B75")
-$brushInactiveRouting = [System.Windows.Media.Brushes]::Transparent
-$global:brushGreen = $bc.ConvertFromString("#68D391")
-$global:brushGray = $bc.ConvertFromString("#A0AEC0")
-
-# SHARED DIALOG RESOURCES & MASTER BUILDER
-$global:sharedDialogResources = @"
+#  SHARED DIALOG XAML RESOURCES
+$sharedDialogResources = @"
     <Window.Resources>
-        <SolidColorBrush x:Key="BgDark" Color="#1A1A1B"/>
-        <SolidColorBrush x:Key="BgPanel" Color="#121417"/>
-        <SolidColorBrush x:Key="BgInput" Color="#0A0C0F"/>
-        <SolidColorBrush x:Key="BorderMain" Color="#2D3748"/>
+        <SolidColorBrush x:Key="BgDark"    Color="#1A1A1B"/>
+        <SolidColorBrush x:Key="BgPanel"   Color="#121417"/>
+        <SolidColorBrush x:Key="BgInput"   Color="#0A0C0F"/>
+        <SolidColorBrush x:Key="BorderMain"  Color="#2D3748"/>
         <SolidColorBrush x:Key="BorderLight" Color="#3A3F44"/>
-        <SolidColorBrush x:Key="TextMain" Color="#E2E8F0"/>
+        <SolidColorBrush x:Key="TextMain"  Color="#E2E8F0"/>
         <SolidColorBrush x:Key="TextMuted" Color="#A0AEC0"/>
         <SolidColorBrush x:Key="TextGreen" Color="#68D391"/>
-        <SolidColorBrush x:Key="ColorOk" Color="#4E7A5E"/>
+        <SolidColorBrush x:Key="ColorOk"   Color="#4E7A5E"/>
         <SolidColorBrush x:Key="ColorHover" Color="#5F9774"/>
         <SolidColorBrush x:Key="BtnStandard" Color="#3A3F44"/>
-        <SolidColorBrush x:Key="BtnHover" Color="#4A5568"/>
+        <SolidColorBrush x:Key="BtnHover"  Color="#4A5568"/>
         <Style TargetType="Button">
             <Setter Property="Background" Value="{StaticResource BtnStandard}"/>
             <Setter Property="Foreground" Value="{StaticResource TextMain}"/>
@@ -301,22 +422,26 @@ $global:sharedDialogResources = @"
     </Window.Resources>
 "@
 
+#  DIALOG HELPER
 function Show-AppDialog {
-    param([string]$Title, [int]$Width, [int]$Height, [string]$InnerXaml, [scriptblock]$OnLoad, [scriptblock]$OnSave)
+    param([string]$Title, [int]$Width, [int]$Height, [string]$InnerXaml,
+          [scriptblock]$OnLoad, [scriptblock]$OnSave)
     $bW = $Width - 30
     $bH = $Height - 54
     $xaml = @"
     <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-            Title="$Title" Height="$Height" Width="$Width" 
+            Title="$Title" Height="$Height" Width="$Width"
             WindowStartupLocation="CenterOwner" Background="#1A1A1B" Foreground="#E2E8F0"
             ResizeMode="NoResize" FontFamily="Segoe UI" ShowInTaskbar="False">
-        $global:sharedDialogResources
+        $sharedDialogResources
         <Canvas>
-            <Border Name="borderMain" Canvas.Left="12" Canvas.Top="12" Width="$bW" Height="$bH" 
-                    Background="{StaticResource BgPanel}" CornerRadius="4" BorderBrush="{StaticResource BorderMain}" BorderThickness="1">
+            <Border Name="borderMain" Canvas.Left="12" Canvas.Top="12" Width="$bW" Height="$bH"
+                    Background="{StaticResource BgPanel}" CornerRadius="4"
+                    BorderBrush="{StaticResource BorderMain}" BorderThickness="1">
                 <Canvas>
-                    <TextBlock Text="$Title" Canvas.Left="15" Canvas.Top="12" FontSize="10" Foreground="{StaticResource TextMuted}" FontWeight="Bold"/>
+                    <TextBlock Text="$Title" Canvas.Left="15" Canvas.Top="12"
+                               FontSize="10" Foreground="{StaticResource TextMuted}" FontWeight="Bold"/>
                     $InnerXaml
                 </Canvas>
             </Border>
@@ -324,54 +449,41 @@ function Show-AppDialog {
     </Window>
 "@
     $dlg = [Windows.Markup.XamlReader]::Parse($xaml)
-    $dlg.Owner = $form
-    
+    $dlg.Owner = $App.UI.form
     $dlg.Add_SourceInitialized({
         try {
             $hwnd = (New-Object System.Windows.Interop.WindowInteropHelper($dlg)).Handle
             [DWM]::DarkTitleBar($hwnd)
         } catch {}
     }.GetNewClosure())
-
+    
     $btnOk = $dlg.FindName("btnOk")
     if ($null -ne $btnOk) {
         $btnOk.Add_Click({
-            if ($null -ne $OnSave) { 
-                $res = & $OnSave $dlg 
-                if ($res -eq $false) { return } 
+            if ($null -ne $OnSave) {
+                $res = & $OnSave $dlg
+                if ($res -eq $false) { return }
             }
             $dlg.DialogResult = $true
             $dlg.Close()
         }.GetNewClosure())
     }
+    
     $btnCancel = $dlg.FindName("btnCancel")
     if ($null -ne $btnCancel) {
         $btnCancel.Add_Click({ $dlg.DialogResult = $false; $dlg.Close() }.GetNewClosure())
     }
-    $dlg.Add_Loaded({
-        if ($null -ne $OnLoad) { & $OnLoad $dlg }
-    }.GetNewClosure())
+    
+    $dlg.Add_Loaded({ if ($null -ne $OnLoad) { & $OnLoad $dlg } }.GetNewClosure())
     return $dlg.ShowDialog() -eq $true
 }
 
-# EVENT HELPER
-function Bind-ToggleEvent {
-    param($lbl, $btn, [scriptblock]$action)
-    $boundAction = {
-        param($sender, $eventArgs)
-        $eventArgs.Handled = $true
-        & $action
-    }.GetNewClosure()
-    if ($null -ne $btn) { $btn.Add_Click($boundAction) }
-    if ($null -ne $lbl -and $null -ne $btn) { $lbl.Add_Click($boundAction) }
-}
-
-# WPF XAML UI
+#  MAIN WINDOW XAML
 $xaml = @"
-<Window 
+<Window
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    Title="Tor Multiplexer" Height="340" Width="595" 
+    Title="Tor Multiplexer" Height="340" Width="595"
     WindowStartupLocation="CenterScreen" Background="#000000" Foreground="#E2E8F0"
     ResizeMode="CanMinimize" FontFamily="Segoe UI">
     <Window.Triggers>
@@ -379,22 +491,22 @@ $xaml = @"
             <BeginStoryboard>
                 <Storyboard>
                     <ColorAnimationUsingKeyFrames Storyboard.TargetName="bgGlow" Storyboard.TargetProperty="Color" Duration="0:1:0" RepeatBehavior="Forever" AutoReverse="True">
-                        <EasingColorKeyFrame Value="#803A70B0" KeyTime="0:0:0" />
-                        <EasingColorKeyFrame Value="#807030A0" KeyTime="0:0:20" /> 
-                        <EasingColorKeyFrame Value="#80A03030" KeyTime="0:0:40" />
-                        <EasingColorKeyFrame Value="#803A70B0" KeyTime="0:1:0" />
+                        <EasingColorKeyFrame Value="#803A70B0" KeyTime="0:0:0"/>
+                        <EasingColorKeyFrame Value="#807030A0" KeyTime="0:0:20"/>
+                        <EasingColorKeyFrame Value="#80A03030" KeyTime="0:0:40"/>
+                        <EasingColorKeyFrame Value="#803A70B0" KeyTime="0:1:0"/>
                     </ColorAnimationUsingKeyFrames>
                     <DoubleAnimationUsingKeyFrames Storyboard.TargetName="bgTransform" Storyboard.TargetProperty="X" Duration="0:0:45" RepeatBehavior="Forever" AutoReverse="True">
-                        <EasingDoubleKeyFrame Value="0" KeyTime="0:0:0" />
-                        <EasingDoubleKeyFrame Value="250" KeyTime="0:0:15" />
-                        <EasingDoubleKeyFrame Value="50" KeyTime="0:0:30" />
-                        <EasingDoubleKeyFrame Value="-100" KeyTime="0:0:45" />
+                        <EasingDoubleKeyFrame Value="0"    KeyTime="0:0:0"/>
+                        <EasingDoubleKeyFrame Value="250"  KeyTime="0:0:15"/>
+                        <EasingDoubleKeyFrame Value="50"   KeyTime="0:0:30"/>
+                        <EasingDoubleKeyFrame Value="-100" KeyTime="0:0:45"/>
                     </DoubleAnimationUsingKeyFrames>
                     <DoubleAnimationUsingKeyFrames Storyboard.TargetName="bgTransform" Storyboard.TargetProperty="Y" Duration="0:0:45" RepeatBehavior="Forever" AutoReverse="True">
-                        <EasingDoubleKeyFrame Value="0" KeyTime="0:0:0" />
-                        <EasingDoubleKeyFrame Value="150" KeyTime="0:0:20" />
-                        <EasingDoubleKeyFrame Value="-50" KeyTime="0:0:35" />
-                        <EasingDoubleKeyFrame Value="80" KeyTime="0:0:45" />
+                        <EasingDoubleKeyFrame Value="0"   KeyTime="0:0:0"/>
+                        <EasingDoubleKeyFrame Value="150" KeyTime="0:0:20"/>
+                        <EasingDoubleKeyFrame Value="-50" KeyTime="0:0:35"/>
+                        <EasingDoubleKeyFrame Value="80"  KeyTime="0:0:45"/>
                     </DoubleAnimationUsingKeyFrames>
                 </Storyboard>
             </BeginStoryboard>
@@ -410,7 +522,7 @@ $xaml = @"
                 <Setter.Value>
                     <ControlTemplate TargetType="ComboBox">
                         <Grid>
-                            <ToggleButton Name="ToggleButton" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" Focusable="False" Cursor="Hand"  IsChecked="{Binding Path=IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"  ClickMode="Press">
+                            <ToggleButton Name="ToggleButton" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" Focusable="False" Cursor="Hand" IsChecked="{Binding Path=IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}" ClickMode="Press">
                                 <ToggleButton.Template>
                                     <ControlTemplate TargetType="ToggleButton">
                                         <Grid>
@@ -429,15 +541,13 @@ $xaml = @"
                             </ToggleButton>
                             <ContentPresenter Name="ContentSite" IsHitTestVisible="False" Content="{TemplateBinding SelectionBoxItem}" Margin="8,0,23,2" VerticalAlignment="Center" HorizontalAlignment="Left">
                                 <ContentPresenter.Resources>
-                                    <Style TargetType="TextBlock">
-                                        <Setter Property="Foreground" Value="#E2E8F0"/>
-                                    </Style>
+                                    <Style TargetType="TextBlock"><Setter Property="Foreground" Value="#E2E8F0"/></Style>
                                 </ContentPresenter.Resources>
                             </ContentPresenter>
                             <Popup Name="Popup" Placement="Bottom" IsOpen="{TemplateBinding IsDropDownOpen}" AllowsTransparency="True" Focusable="False" PopupAnimation="Slide">
                                 <Border Name="DropDownBorder" Background="#121417" BorderThickness="1" BorderBrush="#3A3F44" MinWidth="{TemplateBinding ActualWidth}" MaxHeight="300">
                                     <ScrollViewer Margin="0,2" SnapsToDevicePixels="True">
-                                        <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Contained" />
+                                        <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Contained"/>
                                     </ScrollViewer>
                                 </Border>
                             </Popup>
@@ -460,8 +570,7 @@ $xaml = @"
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
                     <Setter Property="Background" Value="#1AFFFFFF"/>
-                </Trigger>
-            </Style.Triggers>
+                </Trigger>            </Style.Triggers>
         </Style>
         <Style TargetType="Button" x:Key="AdvancedTextStyle">
             <Setter Property="Background" Value="Transparent"/>
@@ -502,9 +611,7 @@ $xaml = @"
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="InnerBorder" Background="Transparent" CornerRadius="4" Margin="1">
-                            <Border.RenderTransform>
-                                <TranslateTransform Y="-0.5" />
-                            </Border.RenderTransform>
+                            <Border.RenderTransform><TranslateTransform Y="-0.5"/></Border.RenderTransform>
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
@@ -517,24 +624,20 @@ $xaml = @"
             </Setter>
         </Style>
     </Window.Resources>
-
     <Canvas>
         <Ellipse x:Name="MovingGlow" Width="800" Height="800" Canvas.Left="50" Canvas.Top="-50" IsHitTestVisible="False">
-            <Ellipse.Effect>
-                <BlurEffect Radius="80" KernelType="Gaussian" />
-            </Ellipse.Effect>
+            <Ellipse.Effect><BlurEffect Radius="80" KernelType="Gaussian"/></Ellipse.Effect>
             <Ellipse.Fill>
                 <RadialGradientBrush>
-                    <GradientStop x:Name="bgGlow" Color="#601A3A6A" Offset="0"/> 
+                    <GradientStop x:Name="bgGlow" Color="#601A3A6A" Offset="0"/>
                     <GradientStop Color="#001A1A1B" Offset="1"/>
                 </RadialGradientBrush>
             </Ellipse.Fill>
-            <Ellipse.RenderTransform>
-                <TranslateTransform x:Name="bgTransform" X="0" Y="0"/>
-            </Ellipse.RenderTransform>
+            <Ellipse.RenderTransform><TranslateTransform x:Name="bgTransform" X="0" Y="0"/></Ellipse.RenderTransform>
         </Ellipse>
         <Border Background="#8C121417" BorderBrush="#2D3748" BorderThickness="1" CornerRadius="4" Canvas.Left="20" Canvas.Top="15" Width="550" Height="200">
             <Canvas>
+                <!-- TITLE BAR -->
                 <Button Name="btnTitleUpdate" Canvas.Left="0" Canvas.Top="0" Width="548" Height="25" Cursor="Hand" Background="Transparent" BorderThickness="0">
                     <Button.Template>
                         <ControlTemplate TargetType="Button">
@@ -550,6 +653,7 @@ $xaml = @"
                     </Button.Template>
                     <TextBlock Name="lblTitleText" Text="TOR MULTIPLEXER" FontSize="10" FontWeight="Bold" Foreground="#718096" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-1,0,0"/>
                 </Button>
+                <!-- ROW: combos -->
                 <Border BorderBrush="#3A3F44" BorderThickness="1" CornerRadius="4,0,0,4" Canvas.Left="15" Canvas.Top="38" Width="80" Height="26">
                     <TextBlock Text="BRIDGE TYPE" FontSize="10" FontWeight="Bold" Foreground="#A0AEC0" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-1,0,0"/>
                 </Border>
@@ -563,6 +667,7 @@ $xaml = @"
                 </Border>
                 <ComboBox Name="comboCount" Canvas.Left="455" Canvas.Top="38" Width="80" Height="26" FontSize="11" BorderThickness="0,1,1,1" Style="{StaticResource DarkComboBox}"/>
                 <Rectangle Canvas.Left="0" Canvas.Top="79" Width="550" Height="1" Fill="#2D3748"/>
+                <!-- LEFT PANEL: session / auto-connect / advanced -->
                 <Border BorderBrush="#3A3F44" BorderThickness="1" CornerRadius="4" Canvas.Left="15" Canvas.Top="96" Width="210" Height="84" Background="Transparent">
                     <Grid>
                         <Grid.RowDefinitions>
@@ -586,17 +691,11 @@ $xaml = @"
                                                     <Border x:Name="HoverOverlay" Background="Transparent"/>
                                                     <Grid HorizontalAlignment="Center" VerticalAlignment="Center">
                                                         <TextBlock x:Name="txtAutoConnect" Text="AUTO-CONNECT" FontSize="10" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center">
-                                                            <TextBlock.Foreground>
-                                                                <SolidColorBrush Color="#A0AEC0"/>
-                                                            </TextBlock.Foreground>
-                                                            <TextBlock.RenderTransform>
-                                                                <TranslateTransform x:Name="transAutoConnect" X="0"/>
-                                                            </TextBlock.RenderTransform>
+                                                            <TextBlock.Foreground><SolidColorBrush Color="#A0AEC0"/></TextBlock.Foreground>
+                                                            <TextBlock.RenderTransform><TranslateTransform x:Name="transAutoConnect" X="0"/></TextBlock.RenderTransform>
                                                         </TextBlock>
                                                         <TextBlock x:Name="txtOn" Text="ON" FontSize="10" FontWeight="Bold" Foreground="#68D391" HorizontalAlignment="Center" VerticalAlignment="Center" Panel.ZIndex="-1" Opacity="0">
-                                                            <TextBlock.RenderTransform>
-                                                                <TranslateTransform x:Name="transOn" X="0"/>
-                                                            </TextBlock.RenderTransform>
+                                                            <TextBlock.RenderTransform><TranslateTransform x:Name="transOn" X="0"/></TextBlock.RenderTransform>
                                                         </TextBlock>
                                                     </Grid>
                                                 </Grid>
@@ -623,9 +722,7 @@ $xaml = @"
                                                     <Border Background="{TemplateBinding Background}"/>
                                                     <Border x:Name="HoverOverlay" Background="Transparent"/>
                                                     <TextBlock x:Name="txtAdv" Text="ADVANCED SETTINGS" FontSize="10" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center">
-                                                        <TextBlock.Foreground>
-                                                            <SolidColorBrush Color="#A0AEC0"/>
-                                                        </TextBlock.Foreground>
+                                                        <TextBlock.Foreground><SolidColorBrush Color="#A0AEC0"/></TextBlock.Foreground>
                                                     </TextBlock>
                                                 </Grid>
                                                 <ControlTemplate.Triggers>
@@ -641,6 +738,7 @@ $xaml = @"
                         </Button>
                     </Grid>
                 </Border>
+                <!-- RIGHT PANEL: mode tabs + connect button -->
                 <Border BorderBrush="#3A3F44" BorderThickness="1" CornerRadius="4" Canvas.Left="239" Canvas.Top="96" Width="296" Height="84" Background="Transparent">
                     <Grid>
                         <Grid.RowDefinitions>
@@ -743,14 +841,10 @@ $xaml = @"
                                 <Grid HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
                                     <Canvas Background="Transparent" IsHitTestVisible="False">
                                         <Path Name="wavePath1" Data="M 0,26 C 75,-4 75,56 150,26 C 225,-4 225,56 300,26 C 375,-4 375,56 450,26 C 525,-4 525,56 600,26 L 600,80 L 0,80 Z" Fill="#25718096" Height="80" Width="600" Canvas.Top="0">
-                                            <Path.RenderTransform>
-                                                <TranslateTransform x:Name="waveTrans1" X="0" Y="0"/>
-                                            </Path.RenderTransform>
+                                            <Path.RenderTransform><TranslateTransform x:Name="waveTrans1" X="0" Y="0"/></Path.RenderTransform>
                                         </Path>
                                         <Path Name="wavePath2" Data="M 0,28 C 60,-2 90,58 150,28 C 210,-2 240,58 300,28 C 360,-2 390,58 450,28 C 510,-2 540,58 600,28 L 600,80 L 0,80 Z" Fill="#15718096" Height="80" Width="600" Canvas.Top="0">
-                                            <Path.RenderTransform>
-                                                <TranslateTransform x:Name="waveTrans2" X="-75" Y="0"/>
-                                            </Path.RenderTransform>
+                                            <Path.RenderTransform><TranslateTransform x:Name="waveTrans2" X="-75" Y="0"/></Path.RenderTransform>
                                         </Path>
                                     </Canvas>
                                     <Grid IsHitTestVisible="False" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
@@ -779,15 +873,16 @@ $xaml = @"
                 </Border>
             </Canvas>
         </Border>
+        <!-- STATUS BAR -->
         <Border Name="UnifiedPanel" Canvas.Left="20" Canvas.Top="230" Width="550" Height="65" Background="#8C121417" BorderBrush="#2D3748" BorderThickness="1" CornerRadius="4">
             <Canvas>
-                <TextBlock Name="lblSocksTitle" Text="MIXED PORT" Canvas.Left="10" Canvas.Top="10" FontSize="10" FontWeight="Bold" Foreground="#A0AEC0"/>
-                <TextBlock Name="lblSocksDataIPs" Text="Waiting for connection..." Canvas.Left="10" Canvas.Top="26" FontSize="12" FontFamily="Consolas" FontWeight="Bold" Foreground="#68D391"/>
-                <TextBlock Name="lblSocksDataTags" Text="" Canvas.Left="200" Canvas.Top="26" FontSize="12" FontFamily="Consolas" FontWeight="Bold" Foreground="#68D391" TextAlignment="Right" Width="60"/>
+                <TextBlock Name="lblSocksTitle"   Text="MIXED PORT"               Canvas.Left="10"  Canvas.Top="10" FontSize="10" FontWeight="Bold" Foreground="#A0AEC0"/>
+                <TextBlock Name="lblSocksDataIPs" Text="Waiting for connection..." Canvas.Left="10"  Canvas.Top="26" FontSize="12" FontFamily="Consolas" FontWeight="Bold" Foreground="#68D391"/>
+                <TextBlock Name="lblSocksDataTags" Text=""                          Canvas.Left="200" Canvas.Top="26" FontSize="12" FontFamily="Consolas" FontWeight="Bold" Foreground="#68D391" TextAlignment="Right" Width="60"/>
                 <Rectangle Canvas.Left="275" Canvas.Top="0" Width="1" Height="63" Fill="#2D3748"/>
-                <TextBlock Name="lblStatsTitle" Text="STATS" Canvas.Left="285" Canvas.Top="10" FontSize="10" FontWeight="Bold" Foreground="#A0AEC0"/>
-                <TextBlock Name="lblStatsData" Text="Speed: 0 KB/s&#x0a;Total: 0 MB" Canvas.Left="285" Canvas.Top="26" FontSize="12" FontFamily="Consolas" Foreground="#68D391" FontWeight="Bold"/>
-                <TextBlock Name="lblGeoData" Text="Loc: --&#x0a;Ping: --" Canvas.Left="410" Canvas.Top="26" FontSize="12" FontFamily="Consolas" Foreground="#68D391" FontWeight="Bold"/>
+                <TextBlock Name="lblStatsTitle" Text="STATS"                      Canvas.Left="285" Canvas.Top="10" FontSize="10" FontWeight="Bold" Foreground="#A0AEC0"/>
+                <TextBlock Name="lblStatsData"  Text="Speed: 0 KB/s&#x0a;Total: 0 MB" Canvas.Left="285" Canvas.Top="26" FontSize="12" FontFamily="Consolas" Foreground="#68D391" FontWeight="Bold"/>
+                <TextBlock Name="lblGeoData"    Text="Loc: --&#x0a;Ping: --"     Canvas.Left="410" Canvas.Top="26" FontSize="12" FontFamily="Consolas" Foreground="#68D391" FontWeight="Bold"/>
                 <Button Name="btnStatsPanel" Canvas.Left="276" Canvas.Top="0" Width="272" Height="63" Cursor="Hand" ToolTip="Click to refresh routing tracker">
                     <Button.Style>
                         <Style TargetType="Button">
@@ -801,22 +896,22 @@ $xaml = @"
                                 </Setter.Value>
                             </Setter>
                             <Style.Triggers>
-                                <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter Property="Background" Value="#1AFFFFFF"/>
-                                </Trigger>
+                                <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="#1AFFFFFF"/></Trigger>
                             </Style.Triggers>
                         </Style>
                     </Button.Style>
                 </Button>
             </Canvas>
         </Border>
+        <!-- ADVANCED SETTINGS PANEL -->
         <Canvas Name="AdvancedCanvas" Canvas.Left="0" Canvas.Top="205" Opacity="0" Visibility="Hidden">
             <Border Name="AdvancedBorder" Background="#8C121417" BorderBrush="#2D3748" BorderThickness="1" CornerRadius="4" ClipToBounds="True" Canvas.Left="20" Canvas.Top="25" Width="550" Height="194">
                 <Canvas>
                     <Border Width="548" Height="26" Canvas.Left="0" Canvas.Top="0" Background="#990A0C0F" CornerRadius="3,3,0,0" BorderBrush="#2D3748" BorderThickness="0,0,0,1"/>
-                    <TextBlock Text="ROUTING" Canvas.Left="0" Canvas.Top="6" Width="275" TextAlignment="Center" FontSize="10" Foreground="#A0AEC0" FontWeight="Bold"/>
-                    <TextBlock Text="SYSTEM" Canvas.Left="275" Canvas.Top="6" Width="275" TextAlignment="Center" FontSize="10" Foreground="#A0AEC0" FontWeight="Bold"/>
+                    <TextBlock Text="ROUTING" Canvas.Left="0"   Canvas.Top="6" Width="275" TextAlignment="Center" FontSize="10" Foreground="#A0AEC0" FontWeight="Bold"/>
+                    <TextBlock Text="SYSTEM"  Canvas.Left="275" Canvas.Top="6" Width="275" TextAlignment="Center" FontSize="10" Foreground="#A0AEC0" FontWeight="Bold"/>
                     <Rectangle Canvas.Left="275" Canvas.Top="0" Width="1" Height="194" Fill="#2D3748"/>
+                    <!-- LEFT: routing toggles -->
                     <Border Canvas.Left="15" Canvas.Top="40" Width="245" Height="135" Background="Transparent" BorderThickness="0">
                         <StackPanel>
                             <Border Style="{StaticResource AdvancedRowStyle}" Height="27">
@@ -861,6 +956,7 @@ $xaml = @"
                             </Border>
                         </StackPanel>
                     </Border>
+                    <!-- RIGHT: system toggles -->
                     <Border Canvas.Left="290" Canvas.Top="40" Width="245" Height="135" Background="Transparent" BorderThickness="0">
                         <StackPanel>
                             <Border Style="{StaticResource AdvancedRowStyle}" Height="27">
@@ -901,6 +997,7 @@ $xaml = @"
                 </Canvas>
             </Border>
         </Canvas>
+        <!-- LOGS PANEL -->
         <Canvas Name="LogsCanvas" Canvas.Left="585" Canvas.Top="15" Width="300" Height="474" Visibility="Hidden" Opacity="0">
             <Border Name="logBorder" Background="#8C121417" Width="300" Height="474" CornerRadius="4" BorderBrush="#2D3748" BorderThickness="1">
                 <Canvas>
@@ -930,19 +1027,20 @@ $xaml = @"
                             </Style>
                         </Button.Style>
                     </Button>
-                    <TextBlock Name="lblTor1" Text="Tor 01: Offline" Canvas.Left="15" Canvas.Top="30" Foreground="#4A5568" FontSize="12" FontFamily="Consolas"/>
-                    <TextBlock Name="lblTor2" Text="Tor 02: Offline" Canvas.Left="15" Canvas.Top="48" Foreground="#4A5568" FontSize="12" FontFamily="Consolas"/>
-                    <TextBlock Name="lblTor3" Text="Tor 03: Offline" Canvas.Left="15" Canvas.Top="66" Foreground="#4A5568" FontSize="12" FontFamily="Consolas"/>
-                    <TextBlock Name="lblTor4" Text="Tor 04: Offline" Canvas.Left="15" Canvas.Top="84" Foreground="#4A5568" FontSize="12" FontFamily="Consolas"/>
-                    <TextBlock Name="lblTor5" Text="Tor 05: Offline" Canvas.Left="155" Canvas.Top="30" Foreground="#4A5568" FontSize="12" FontFamily="Consolas"/>
-                    <TextBlock Name="lblTor6" Text="Tor 06: Offline" Canvas.Left="155" Canvas.Top="48" Foreground="#4A5568" FontSize="12" FontFamily="Consolas"/>
-                    <TextBlock Name="lblTor7" Text="Tor 07: Offline" Canvas.Left="155" Canvas.Top="66" Foreground="#4A5568" FontSize="12" FontFamily="Consolas"/>
-                    <TextBlock Name="lblTor8" Text="Tor 08: Offline" Canvas.Left="155" Canvas.Top="84" Foreground="#4A5568" FontSize="12" FontFamily="Consolas"/>
-                    <Rectangle Name="logSeparator" Canvas.Left="15" Canvas.Top="110" Width="270" Height="1" Fill="#2D3748" />
-                    <TextBlock Name="lblConnTitle" Text="CONNECTIONS" Canvas.Left="15" Canvas.Top="120" Foreground="#A0AEC0" FontSize="10" FontWeight="Bold" />
-                    <TextBox Name="txtXrayLogs" Canvas.Left="15" Canvas.Top="138" Width="270" Height="321" 
-                             Background="#990A0C0F" Foreground="#68D391" BorderBrush="#2D3748" BorderThickness="1" 
-                             FontSize="10" TextWrapping="Wrap" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Hidden" IsReadOnly="True" FontFamily="Consolas" />
+                    <TextBlock Name="lblTor1" Text="Tor 01: Offline" Canvas.Left="15"  Canvas.Top="30"  Foreground="#4A5568" FontSize="12" FontFamily="Consolas"/>
+                    <TextBlock Name="lblTor2" Text="Tor 02: Offline" Canvas.Left="15"  Canvas.Top="48"  Foreground="#4A5568" FontSize="12" FontFamily="Consolas"/>
+                    <TextBlock Name="lblTor3" Text="Tor 03: Offline" Canvas.Left="15"  Canvas.Top="66"  Foreground="#4A5568" FontSize="12" FontFamily="Consolas"/>
+                    <TextBlock Name="lblTor4" Text="Tor 04: Offline" Canvas.Left="15"  Canvas.Top="84"  Foreground="#4A5568" FontSize="12" FontFamily="Consolas"/>
+                    <TextBlock Name="lblTor5" Text="Tor 05: Offline" Canvas.Left="155" Canvas.Top="30"  Foreground="#4A5568" FontSize="12" FontFamily="Consolas"/>
+                    <TextBlock Name="lblTor6" Text="Tor 06: Offline" Canvas.Left="155" Canvas.Top="48"  Foreground="#4A5568" FontSize="12" FontFamily="Consolas"/>
+                    <TextBlock Name="lblTor7" Text="Tor 07: Offline" Canvas.Left="155" Canvas.Top="66"  Foreground="#4A5568" FontSize="12" FontFamily="Consolas"/>
+                    <TextBlock Name="lblTor8" Text="Tor 08: Offline" Canvas.Left="155" Canvas.Top="84"  Foreground="#4A5568" FontSize="12" FontFamily="Consolas"/>
+                    <Rectangle Name="logSeparator" Canvas.Left="15" Canvas.Top="110" Width="270" Height="1" Fill="#2D3748"/>
+                    <TextBlock Name="lblConnTitle" Text="CONNECTIONS" Canvas.Left="15" Canvas.Top="120" Foreground="#A0AEC0" FontSize="10" FontWeight="Bold"/>
+                    <TextBox Name="txtXrayLogs" Canvas.Left="15" Canvas.Top="138" Width="270" Height="321"
+                             Background="#990A0C0F" Foreground="#68D391" BorderBrush="#2D3748" BorderThickness="1"
+                             FontSize="10" TextWrapping="Wrap" VerticalScrollBarVisibility="Hidden"
+                             HorizontalScrollBarVisibility="Hidden" IsReadOnly="True" FontFamily="Consolas"/>
                 </Canvas>
             </Border>
         </Canvas>
@@ -950,316 +1048,128 @@ $xaml = @"
 </Window>
 "@
 
-# INTERFACE LAUNCH COMPILER
+#  COMPILE XAML
 try {
-    $form = [Windows.Markup.XamlReader]::Parse($xaml)
-    $lblTitleText = $form.FindName("lblTitleText")
-    $lblTitleText.Text = "TOR MULTIPLEXER v$global:currentVersion"
-    if (Test-Path (Get-AppPath "icon.ico")) { 
-        $form.Icon = [System.Windows.Media.Imaging.BitmapFrame]::Create([uri](Get-AppPath "icon.ico")) 
+    $App.UI.form = [Windows.Markup.XamlReader]::Parse($xaml)
+    $App.UI.form.Add_SourceInitialized({
+        try {
+            $hwnd = (New-Object System.Windows.Interop.WindowInteropHelper($App.UI.form)).Handle
+            [DWM]::DarkTitleBar($hwnd)
+        } catch {}
+    })
+    if (Test-Path (Get-AppPath "icon.ico")) {
+        $App.UI.form.Icon = [System.Windows.Media.Imaging.BitmapFrame]::Create([uri](Get-AppPath "icon.ico"))
     }
 } catch {
     [System.Windows.Forms.MessageBox]::Show("App failed to compile the layout window.`n`nError: $($_.Exception.Message)", "Launch Crash Debugger", 0, 16)
     [Environment]::Exit(0)
 }
 
-# ENFORCE NATIVE DARK TITLE BAR
-$form.Add_SourceInitialized({
-    try {
-        $hwnd = (New-Object System.Windows.Interop.WindowInteropHelper($form)).Handle
-        [DWM]::DarkTitleBar($hwnd)
-    } catch {}
-})
+#  MAP WPF NAMED ELEMENTS 
+$_names = @(
+    "comboBridge","comboConfig","comboCount",
+    "btnAction","btnActionMainText","btnActionSubText",
+    "wavePath1","wavePath2","waveTrans1","waveTrans2",
+    "btnProxyMode","btnVpnMode","vpnToolTip","btnClearProxy",
+    "btnAutoStartMain","btnAdvMain","lblSessionTime",
+    "btnDirectLbl","btnDirectTog","btnV2rayLbl","btnV2rayTog",
+    "btnOutboundLbl","btnOutboundTog","btnDohLbl","btnDohTog",
+    "btnAdBlockLbl","btnAdBlockTog","btnBootLbl","btnBootTog",
+    "btnDebugLbl","btnDebugTog","btnTrayLbl","btnTrayTog",
+    "btnLogsLbl","btnLogsTog","btnDesktop",
+    "AdvancedCanvas","AdvancedBorder","LogsCanvas","logBorder",
+    "txtXrayLogs","btnCloseLogs","lblTorTitle","logSeparator","lblConnTitle",
+    "lblTor1","lblTor2","lblTor3","lblTor4","lblTor5","lblTor6","lblTor7","lblTor8",
+    "UnifiedPanel","lblSocksTitle","lblSocksDataIPs","lblSocksDataTags",
+    "lblStatsTitle","lblStatsData","lblGeoData","btnStatsPanel",
+    "lblTitleText","btnTitleUpdate"
+)
+foreach ($n in $_names) { $App.UI[$n] = $App.UI.form.FindName($n) }
+$App.UI.lblTitleText.Text = "TOR MULTIPLEXER v$($App.Config.currentVersion)"
 
-# MAP WPF ELEMENTS TO POWERSHELL
-$comboBridge        = $form.FindName("comboBridge")
-$comboConfig        = $form.FindName("comboConfig")
-$comboCount         = $form.FindName("comboCount")
-$btnAction          = $form.FindName("btnAction")
-$btnActionMainText  = $form.FindName("btnActionMainText")
-$btnActionSubText   = $form.FindName("btnActionSubText")
-$wavePath1          = $form.FindName("wavePath1")
-$wavePath2          = $form.FindName("wavePath2")
-$waveTrans1         = $form.FindName("waveTrans1")
-$waveTrans2         = $form.FindName("waveTrans2")
-$btnProxyMode       = $form.FindName("btnProxyMode")
-$btnVpnMode         = $form.FindName("btnVpnMode")
-$vpnToolTip         = $form.FindName("vpnToolTip")
-$btnClearProxy      = $form.FindName("btnClearProxy")
-$btnAutoStartMain   = $form.FindName("btnAutoStartMain")
-$btnAdvMain         = $form.FindName("btnAdvMain")
-$lblSessionTime     = $form.FindName("lblSessionTime")
-$btnDirectLbl       = $form.FindName("btnDirectLbl")
-$btnDirectTog       = $form.FindName("btnDirectTog")
-$btnV2rayLbl        = $form.FindName("btnV2rayLbl")
-$btnV2rayTog        = $form.FindName("btnV2rayTog")
-$btnOutboundLbl     = $form.FindName("btnOutboundLbl")
-$btnOutboundTog     = $form.FindName("btnOutboundTog")
-$btnDohLbl          = $form.FindName("btnDohLbl")
-$btnDohTog          = $form.FindName("btnDohTog")
-$btnAdBlockLbl      = $form.FindName("btnAdBlockLbl")
-$btnAdBlockTog      = $form.FindName("btnAdBlockTog")
-$btnBootLbl         = $form.FindName("btnBootLbl")
-$btnBootTog         = $form.FindName("btnBootTog")
-$btnDebugLbl        = $form.FindName("btnDebugLbl")
-$btnDebugTog        = $form.FindName("btnDebugTog")
-$btnTrayLbl         = $form.FindName("btnTrayLbl")
-$btnTrayTog         = $form.FindName("btnTrayTog")
-$btnLogsLbl         = $form.FindName("btnLogsLbl")
-$btnLogsTog         = $form.FindName("btnLogsTog")
-$btnDesktop         = $form.FindName("btnDesktop")
-$AdvancedCanvas     = $form.FindName("AdvancedCanvas")
-$AdvancedBorder     = $form.FindName("AdvancedBorder")
-$LogsCanvas         = $form.FindName("LogsCanvas")
-$logBorder          = $form.FindName("logBorder")
-$txtXrayLogs        = $form.FindName("txtXrayLogs")
-$btnCloseLogs       = $form.FindName("btnCloseLogs")
-$lblTorTitle        = $form.FindName("lblTorTitle")
-$logSeparator       = $form.FindName("logSeparator")
-$lblConnTitle       = $form.FindName("lblConnTitle")
-$lblTor1            = $form.FindName("lblTor1")
-$lblTor2            = $form.FindName("lblTor2")
-$lblTor3            = $form.FindName("lblTor3")
-$lblTor4            = $form.FindName("lblTor4")
-$lblTor5            = $form.FindName("lblTor5")
-$lblTor6            = $form.FindName("lblTor6")
-$lblTor7            = $form.FindName("lblTor7")
-$lblTor8            = $form.FindName("lblTor8")
-$UnifiedPanel       = $form.FindName("UnifiedPanel")
-$lblSocksTitle      = $form.FindName("lblSocksTitle")
-$lblSocksDataIPs    = $form.FindName("lblSocksDataIPs")
-$lblSocksDataTags   = $form.FindName("lblSocksDataTags")
-$lblStatsTitle      = $form.FindName("lblStatsTitle")
-$lblStatsData       = $form.FindName("lblStatsData")
-$lblGeoData         = $form.FindName("lblGeoData")
-$btnStatsPanel      = $form.FindName("btnStatsPanel")
-$lblTitleText       = $form.FindName("lblTitleText")
-$btnTitleUpdate     = $form.FindName("btnTitleUpdate")
+#  PRE-BUILD BRUSHES
+$_bc = New-Object System.Windows.Media.BrushConverter
+$App.UI.brGreen          = $_bc.ConvertFromString("#68D391")
+$App.UI.brGray           = $_bc.ConvertFromString("#A0AEC0")
+$App.UI.brRed            = $_bc.ConvertFromString("#E53E3E")
+$App.UI.brWhite          = $_bc.ConvertFromString("#FFFFFF")
+$App.UI.brTransparent    = [System.Windows.Media.Brushes]::Transparent
+$App.UI.brActiveRouting  = $_bc.ConvertFromString("#80646B75")
+$App.UI.brInactiveRouting = [System.Windows.Media.Brushes]::Transparent
+$App.UI.waveBrush1 = New-Object System.Windows.Media.SolidColorBrush([System.Windows.Media.Colors]::DimGray)
+$App.UI.waveBrush1.Opacity = 0.25
+$App.UI.waveBrush2 = New-Object System.Windows.Media.SolidColorBrush([System.Windows.Media.Colors]::DimGray)
+$App.UI.waveBrush2.Opacity = 0.15
+$App.UI.wavePath1.Fill = $App.UI.waveBrush1
+$App.UI.wavePath2.Fill = $App.UI.waveBrush2
 
+#  COMBO BOX POPULATION
 function Add-ComboItem($combo, $text, $tag) {
     $cbi = New-Object System.Windows.Controls.ComboBoxItem
     $cbi.Content = $text
-    $cbi.Tag = $tag
+    $cbi.Tag     = $tag
     if ($tag -eq "Custom") {
         $cbi.Add_PreviewMouseLeftButtonDown({
             param($sender, $e)
             $e.Handled = $true
             $combo.IsDropDownOpen = $false
             if ($combo.Name -eq "comboBridge") {
-                $global:ignoreComboChange = $true
+                $App.State.ignoreComboChange = $true
                 $combo.SelectedItem = $sender
                 DoEvents
-                if (-not (Show-CustomBridgeDialog)) { 
-                    Set-ComboSelectedTag $combo $global:previousBridge 
-                } else { 
-                    $global:previousBridge = "Custom" 
-                }
+                if (-not (Show-CustomBridgeDialog)) {
+                    Set-ComboSelectedTag $combo $App.State.previousBridge
+                } else { $App.State.previousBridge = "Custom" }
                 Save-Config
-                $global:ignoreComboChange = $false
+                $App.State.ignoreComboChange = $false
             } elseif ($combo.Name -eq "comboConfig") {
-                $global:ignoreComboChange = $true
+                $App.State.ignoreComboChange = $true
                 $combo.SelectedItem = $sender
                 DoEvents
-                if (-not (Show-ExitNodeDialog)) { 
-                    Set-ComboSelectedTag $combo $global:previousConfig 
-                } else { 
-                    $global:previousConfig = "Custom" 
-                }
+                if (-not (Show-ExitNodeDialog)) {
+                    Set-ComboSelectedTag $combo $App.State.previousConfig
+                } else { $App.State.previousConfig = "Custom" }
                 Save-Config
-                $global:ignoreComboChange = $false
+                $App.State.ignoreComboChange = $false
             }
         }.GetNewClosure())
     }
     $combo.Items.Add($cbi) | Out-Null
 }
 
-Add-ComboItem $comboBridge "Direct (None)" "Direct (None)"
-Add-ComboItem $comboBridge "meek_lite" "meek_lite"
-Add-ComboItem $comboBridge "obfs4" "obfs4"
-Add-ComboItem $comboBridge "snowflake" "snowflake"
-Add-ComboItem $comboBridge "Custom" "Custom"
-Add-ComboItem $comboConfig "Optimized" "Optimized"
-Add-ComboItem $comboConfig "Custom" "Custom"
-Add-ComboItem $comboCount "1" "1"
-Add-ComboItem $comboCount "2" "2"
-Add-ComboItem $comboCount "3" "3"
-Add-ComboItem $comboCount "4" "4"
-Add-ComboItem $comboCount "5" "5"
-Add-ComboItem $comboCount "6" "6"
-Add-ComboItem $comboCount "7" "7"
-Add-ComboItem $comboCount "8" "8"
+Add-ComboItem $App.UI.comboBridge "Direct (None)" "Direct (None)"
+Add-ComboItem $App.UI.comboBridge "meek_lite"     "meek_lite"
+Add-ComboItem $App.UI.comboBridge "obfs4"         "obfs4"
+Add-ComboItem $App.UI.comboBridge "snowflake"     "snowflake"
+Add-ComboItem $App.UI.comboBridge "Custom"        "Custom"
+
+Add-ComboItem $App.UI.comboConfig "Optimized"     "Optimized"
+Add-ComboItem $App.UI.comboConfig "Custom"        "Custom"
+
+foreach ($n in 1..8) { Add-ComboItem $App.UI.comboCount "$n" "$n" }
 
 function Set-ComboSelectedTag($combo, $tag) {
     foreach ($item in $combo.Items) {
-        if ($item.Tag -eq $tag) { 
-            $combo.SelectedItem = $item
-            break 
-        }
+        if ($item.Tag -eq $tag) { $combo.SelectedItem = $item; break }
     }
 }
 
-Set-ComboSelectedTag $comboBridge $lastBridge
-Set-ComboSelectedTag $comboConfig $lastConfig
-Set-ComboSelectedTag $comboCount $lastCount
-if ($null -ne $comboBridge.SelectedItem) { 
-    $global:previousBridge = $comboBridge.SelectedItem.Tag 
-} else { 
-    $global:previousBridge = "meek_lite" 
-}
-if ($null -ne $comboConfig.SelectedItem) { 
-    $global:previousConfig = $comboConfig.SelectedItem.Tag 
-} else { 
-    $global:previousConfig = "Optimized" 
-}
+Set-ComboSelectedTag $App.UI.comboBridge $App.Config.lastBridge
+Set-ComboSelectedTag $App.UI.comboConfig $App.Config.lastConfig
+Set-ComboSelectedTag $App.UI.comboCount  $App.Config.lastCount
 
-# WPF HELPER FUNCTIONS
-function DoEvents {
-    try {
-        if ($null -ne $form -and $null -ne $form.Dispatcher) {
-            $frame = New-Object System.Windows.Threading.DispatcherFrame
-            $form.Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::Background, [System.Action]{
-                $frame.Continue = $false
-            }) | Out-Null
-            [System.Windows.Threading.Dispatcher]::PushFrame($frame)
-        }
-    } catch {}
-}
+$App.State.previousBridge = if ($null -ne $App.UI.comboBridge.SelectedItem) { $App.UI.comboBridge.SelectedItem.Tag } else { "meek_lite" }
+$App.State.previousConfig = if ($null -ne $App.UI.comboConfig.SelectedItem) { $App.UI.comboConfig.SelectedItem.Tag } else { "Optimized" }
 
-function Wait-NonBlocking($s) { 
-    $end = (Get-Date).AddSeconds($s)
-    while ((Get-Date) -lt $end) { 
-        if ($global:abortBoot) { return }
-        DoEvents
-        Start-Sleep -Milliseconds 50 
-    } 
-}
-
-function Set-AutoConnectState([bool]$state, [bool]$animate) {
-    if ($null -eq $btnAutoStartMain) { return }
-    $template = $btnAutoStartMain.Template
-    if ($null -eq $template) { return }
-    $trans1        = $template.FindName("transAutoConnect", $btnAutoStartMain)
-    $trans2        = $template.FindName("transOn", $btnAutoStartMain)
-    $txtOn         = $template.FindName("txtOn", $btnAutoStartMain)
-    $txtAutoConnect = $template.FindName("txtAutoConnect", $btnAutoStartMain)
-    if ($null -eq $trans1 -or $null -eq $trans2 -or $null -eq $txtAutoConnect -or $null -eq $txtOn) { return }
-
-    $dur  = if ($animate) { New-Object System.Windows.Duration([TimeSpan]::FromMilliseconds(300)) } else { New-Object System.Windows.Duration([TimeSpan]::FromMilliseconds(0)) }
-    $t1X  = if ($state) { -10.0 } else { 0.0 }
-    $t2X  = if ($state) { 44.0  } else { 0.0 }
-    $op   = if ($state) { 1.0   } else { 0.0 }
-    $col  = if ($state) { [System.Windows.Media.ColorConverter]::ConvertFromString("#E2E8F0") } else { [System.Windows.Media.ColorConverter]::ConvertFromString("#A0AEC0") }
-
-    $trans1.BeginAnimation([System.Windows.Media.TranslateTransform]::XProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation($t1X, $dur)))
-    $trans2.BeginAnimation([System.Windows.Media.TranslateTransform]::XProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation($t2X, $dur)))
-    $txtOn.BeginAnimation([System.Windows.UIElement]::OpacityProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation($op, $dur)))
-    $ca = New-Object System.Windows.Media.Animation.ColorAnimation($col, $dur)
-    if ($txtAutoConnect.Foreground -is [System.Windows.Media.SolidColorBrush]) {
-        $clonedBrush = $txtAutoConnect.Foreground.Clone()
-    } else {
-        $clonedBrush = New-Object System.Windows.Media.SolidColorBrush([System.Windows.Media.ColorConverter]::ConvertFromString("#A0AEC0"))
-    }
-    $txtAutoConnect.Foreground = $clonedBrush
-    $clonedBrush.BeginAnimation([System.Windows.Media.SolidColorBrush]::ColorProperty, $ca)
-}
-
-function Set-AdvState([bool]$state) {
-    if ($null -eq $btnAdvMain) { return }
-    $txtAdv = $btnAdvMain.Template.FindName("txtAdv", $btnAdvMain)
-    if ($null -ne $txtAdv) {
-        $col = if ($state) { "#E2E8F0" } else { "#A0AEC0" }
-        $txtAdv.Foreground = New-Object System.Windows.Media.SolidColorBrush([System.Windows.Media.ColorConverter]::ConvertFromString($col))
-    }
-}
-
-function Set-WpfToggleState($btn, $state, $onText = "Enabled", $offText = "Disabled") {
-    $bcConverter = New-Object System.Windows.Media.BrushConverter
-    $textGreen = $bcConverter.ConvertFromString("#68D391")
-    $textRed   = $bcConverter.ConvertFromString("#E53E3E") 
-    $textGray  = $bcConverter.ConvertFromString("#A0AEC0")
-
-    if ($btn.Name -eq "btnLogsTog") {
-        $btn.Background = [System.Windows.Media.Brushes]::Transparent
-        $btn.Foreground = $textGray
-        $btn.Content    = if ($state) { "HIDE" } else { "SHOW" }
-    } else {
-        $btn.Background = [System.Windows.Media.Brushes]::Transparent
-        if ($state) { 
-            $btn.Content    = $onText.ToUpper()
-            $btn.Foreground = $textGreen
-        } else { 
-            $btn.Content    = $offText.ToUpper()
-            $btn.Foreground = $textRed
-        }
-    }
-}
-
-# INITIAL TOGGLE STATES
-$toggles = @{
-    $btnDirectTog   = $global:enableDirect
-    $btnV2rayTog    = $global:enableV2rayChain
-    $btnOutboundTog = $global:enableOutboundProxy
-    $btnDohTog      = ($global:enableTorDoh -or $global:enableUpstreamDoh)
-    $btnBootTog     = $script:launchOnBoot
-    $btnDebugTog    = $script:debugMode
-    $btnTrayTog     = $global:minimizeToTray
-    $btnAdBlockTog  = $global:enableAdBlock
-}
-foreach ($btn in $toggles.Keys) { 
-    if ($null -ne $btn) { Set-WpfToggleState $btn $toggles[$btn] } 
-}
-
-function Force-InitialColors {
-    Set-AutoConnectState $false $false 
-    Set-AdvState $global:isAdvancedOpen
-    Set-WpfToggleState $btnV2rayTog    $global:enableV2rayChain "Enabled" "Disabled"
-    Set-WpfToggleState $btnDirectTog   $global:enableDirect "Enabled" "Disabled"
-    Set-WpfToggleState $btnOutboundTog $global:enableOutboundProxy "Enabled" "Disabled"
-    Set-WpfToggleState $btnDohTog      ($global:enableTorDoh -or $global:enableUpstreamDoh) "Enabled" "Disabled"
-    Set-WpfToggleState $btnBootTog     $script:launchOnBoot "Enabled" "Disabled"
-    Set-WpfToggleState $btnDebugTog    $script:debugMode "Enabled" "Disabled"
-    Set-WpfToggleState $btnTrayTog     $global:minimizeToTray "Enabled" "Disabled"
-    Set-WpfToggleState $btnAdBlockTog  $global:enableAdBlock "Enabled" "Disabled"
-    Set-WpfToggleState $btnLogsTog     $global:isLogsOpen "HIDE" "SHOW"
-}
-Force-InitialColors
-
-function Update-RoutingToggle {
-    $btnProxyMode.Background = $brushInactiveRouting
-    $btnProxyMode.Foreground = "#A0AEC0"
-    $btnClearProxy.Background = $brushInactiveRouting
-    $btnClearProxy.Foreground = "#A0AEC0"
-    $btnVpnMode.Background = $brushInactiveRouting
-    $btnVpnMode.Foreground = "#A0AEC0"
-    $btnVpnMode.Cursor = [System.Windows.Input.Cursors]::Hand
-    $vpnToolTip.Content = "Route your entire system's network globally through the secure tunnel."
-    $vpnToolTip.Visibility = "Visible" 
-    switch ($global:lastXrayMode) {
-        "Proxy Mode"  { $btnProxyMode.Background  = $brushActiveRouting; $btnProxyMode.Foreground  = "#FFFFFF" }
-        "VPN Mode"    { $btnVpnMode.Background    = $brushActiveRouting; $btnVpnMode.Foreground    = "#FFFFFF" }
-        "Clear Proxy" { $btnClearProxy.Background = $brushActiveRouting; $btnClearProxy.Foreground = "#FFFFFF" }
-    }
-    $btnDirectLbl.IsEnabled = $true; $btnDirectLbl.Opacity = 1.0
-    $btnDirectTog.IsEnabled = $true; $btnDirectTog.Opacity = 1.0
-}
-Update-RoutingToggle
-
-function Evaluate-ProxyExclusivity {
-    $isEnabled = -not $global:enableTorDoh
-    $btnOutboundLbl.IsEnabled = $isEnabled; $btnOutboundLbl.Opacity = if ($isEnabled) { 1.0 } else { 0.5 }
-    $btnOutboundTog.IsEnabled = $isEnabled; $btnOutboundTog.Opacity = if ($isEnabled) { 1.0 } else { 0.5 }
-}
-Evaluate-ProxyExclusivity
-
-# SAFE RELATIVE BRIDGE DATABASE
+#  BRIDGE DATA
 $bridgeData = @{
-    "meek_lite" = @{ 
-        "plugin" = "ClientTransportPlugin meek_lite,obfs2,obfs3,obfs4,scramblesuit,webtunnel exec ..\..\PluggableTransports\lyrebird.exe"
-        "lines"  = @("Bridge meek_lite 192.0.2.20:80 url=https://1603026938.rsc.cdn77.org front=www.phpmyadmin.net utls=HelloRandomizedALPN") 
+    "meek_lite" = @{
+        plugin = "ClientTransportPlugin meek_lite,obfs2,obfs3,obfs4,scramblesuit,webtunnel exec ..\..\PluggableTransports\lyrebird.exe"
+        lines  = @("Bridge meek_lite 192.0.2.20:80 url=https://1603026938.rsc.cdn77.org front=www.phpmyadmin.net utls=HelloRandomizedALPN")
     }
-    "obfs4" = @{ 
-        "plugin" = "ClientTransportPlugin meek_lite,obfs2,obfs3,obfs4,scramblesuit,webtunnel exec ..\..\PluggableTransports\lyrebird.exe"
-        "lines"  = @(
+    "obfs4" = @{
+        plugin = "ClientTransportPlugin meek_lite,obfs2,obfs3,obfs4,scramblesuit,webtunnel exec ..\..\PluggableTransports\lyrebird.exe"
+        lines  = @(
             "Bridge obfs4 37.218.245.14:38224 D9A82D2F9C2F65A18407B1D2B764F130847F8B5D cert=bjRaMrr1BRiAW8IE9U5z27fQaYgOhX1UCmOpg2pFpoMvo6ZgQMzLsaTzzQNTlm7hNcb+Sg iat-mode=0",
             "Bridge obfs4 209.148.46.65:443 74FAD13168806246602538555B5521A0383A1875 cert=ssH+9rP8dG2NLDN2XuFw63hIO/9MNNinLmxQDpVa+7kTOa9/m+tGWT1SmSYpQ9uTBGa6Hw iat-mode=0",
             "Bridge obfs4 146.57.248.225:22 10A6CD36A537FCE513A322361547444B393989F0 cert=K1gDtDAIcUfeLqbstggjIw2rtgIKqdIhUlHp82XRqNSq/mtAjp1BIC9vHKJ2FAEpGssTPw iat-mode=0",
@@ -1267,18 +1177,139 @@ $bridgeData = @{
             "Bridge obfs4 51.222.13.177:80 5EDAC3B810E12B01F6FD8050D2FD3E277B289A08 cert=2uplIpLQ0q9+0qMFrK5pkaYRDOe460LL9WHBvatgkuRr/SL31wBOEupaMMJ6koRE6Ld0ew iat-mode=1",
             "Bridge obfs4 212.83.43.95:443 BFE712113A72899AD685764B211FACD30FF52C31 cert=ayq0XzCwhpdysn5o0EyDUbmSOx3X/oTEbzDMvczHOdBJKlvIdHHLJGkZARtT4dcBFArPPg iat-mode=1",
             "Bridge obfs4 212.83.43.74:443 39562501228A4D5E27FCA4C0C81A01EE23AE3EE4 cert=PBwr+S8JTVZo6MPdHnkTwXJPILWADLqfMGoVvhZClMq/Urndyd42BwX9YFJHZnBB3H0XCw iat-mode=1"
-        ) 
+        )
     }
-    "snowflake" = @{ 
-        "plugin" = "ClientTransportPlugin snowflake exec ..\..\PluggableTransports\lyrebird.exe"
-        "lines"  = @(
+    "snowflake" = @{
+        plugin = "ClientTransportPlugin snowflake exec ..\..\PluggableTransports\lyrebird.exe"
+        lines  = @(
             "Bridge snowflake 192.0.2.3:80 2B280B23E1107BB62ABFC40DDCC8824814F80A72 fingerprint=2B280B23E1107BB62ABFC40DDCC8824814F80A72 url=https://1098762253.rsc.cdn77.org/ fronts=app.datapacket.com,www.datapacket.com ice=stun:stun.epygi.com:3478,stun:stun.uls.co.za:3478,stun:stun.voipgate.com:3478,stun:stun.mixvoip.com:3478,stun:stun.telnyx.com:3478,stun:stun.hot-chilli.net:3478,stun:stun.fitauto.ru:3478,stun:stun.m-online.net:3478 utls-imitate=hellorandomizedalpn",
             "Bridge snowflake 192.0.2.4:80 8838024498816A039FCBBAB14E6F40A0843051FA fingerprint=8838024498816A039FCBBAB14E6F40A0843051FA url=https://1098762253.rsc.cdn77.org/ fronts=app.datapacket.com,www.datapacket.com ice=stun:stun.epygi.com:3478,stun:stun.uls.co.za:3478,stun:stun.voipgate.com:3478,stun:stun.mixvoip.com:3478,stun:stun.telnyx.com:3478,stun:stun.hot-chilli.net:3478,stun:stun.fitauto.ru:3478,stun:stun.m-online.net:3478 utls-imitate=hellorandomizedalpn"
-        ) 
+        )
     }
 }
 
-# POP UP WINDOWS
+#  WPF HELPERS
+function DoEvents {
+    if ($null -eq $App.UI.form -or $App.UI.form.Dispatcher.HasShutdownStarted) { return }
+    $frame = New-Object System.Windows.Threading.DispatcherFrame
+    $App.UI.form.Dispatcher.BeginInvoke(
+        [System.Windows.Threading.DispatcherPriority]::Background,
+        [System.Action]{ $frame.Continue = $false }
+    ) | Out-Null
+    [System.Windows.Threading.Dispatcher]::PushFrame($frame)
+}
+
+function Wait-NonBlocking($s) {
+    $end = (Get-Date).AddSeconds($s)
+    while ((Get-Date) -lt $end) {
+        if ($App.State.abortBoot) { return }
+        DoEvents
+        [System.Threading.Thread]::Sleep(10) 
+    }
+}
+
+function Set-AutoConnectState([bool]$state, [bool]$animate) {
+    $btn = $App.UI.btnAutoStartMain
+    if ($null -eq $btn) { return }
+    $tpl = $btn.Template
+    if ($null -eq $tpl) { return }
+    $trans1 = $tpl.FindName("transAutoConnect", $btn)
+    $trans2 = $tpl.FindName("transOn", $btn)
+    $txtOn  = $tpl.FindName("txtOn", $btn)
+    $txtAC  = $tpl.FindName("txtAutoConnect", $btn)
+    
+    if ($null -eq $trans1 -or $null -eq $trans2 -or $null -eq $txtOn -or $null -eq $txtAC) { return }
+    
+    $dur = if ($animate) { New-Object System.Windows.Duration([TimeSpan]::FromMilliseconds(300)) } `
+           else          { New-Object System.Windows.Duration([TimeSpan]::FromMilliseconds(0))   }
+    $val1 = if ($state) { -10.0 } else { 0.0 }
+    $trans1.BeginAnimation([System.Windows.Media.TranslateTransform]::XProperty,
+        (New-Object System.Windows.Media.Animation.DoubleAnimation([double]$val1, $dur)))
+    $val2 = if ($state) { 44.0  } else { 0.0 }
+    $trans2.BeginAnimation([System.Windows.Media.TranslateTransform]::XProperty,
+        (New-Object System.Windows.Media.Animation.DoubleAnimation([double]$val2, $dur)))
+    $val3 = if ($state) { 1.0 } else { 0.0 }
+    $txtOn.BeginAnimation([System.Windows.UIElement]::OpacityProperty,
+        (New-Object System.Windows.Media.Animation.DoubleAnimation([double]$val3, $dur)))
+    $targetCol = if ($state) { [System.Windows.Media.ColorConverter]::ConvertFromString("#E2E8F0") } `
+                 else        { [System.Windows.Media.ColorConverter]::ConvertFromString("#A0AEC0") }
+    $cloned = if ($txtAC.Foreground -is [System.Windows.Media.SolidColorBrush]) { $txtAC.Foreground.Clone() } `
+              else { New-Object System.Windows.Media.SolidColorBrush([System.Windows.Media.ColorConverter]::ConvertFromString("#A0AEC0")) }
+    $txtAC.Foreground = $cloned
+    $cloned.BeginAnimation([System.Windows.Media.SolidColorBrush]::ColorProperty,
+        (New-Object System.Windows.Media.Animation.ColorAnimation($targetCol, $dur)))
+}
+
+function Set-AdvState([bool]$state) {
+    $btn = $App.UI.btnAdvMain
+    if ($null -eq $btn) { return }
+    $txt = $btn.Template.FindName("txtAdv", $btn)
+    if ($null -ne $txt) {
+        $txt.Foreground = if ($state) { $App.UI.brWhite } else { $App.UI.brGray }
+    }
+}
+
+function Set-WpfToggleState($btn, $state, $onText = "Enabled", $offText = "Disabled") {
+    $btn.Background = $App.UI.brTransparent
+    if ($btn.Name -eq "btnLogsTog") {
+        $btn.Foreground = $App.UI.brGray
+        $btn.Content    = if ($state) { "HIDE" } else { "SHOW" }
+    } elseif ($state) {
+        $btn.Content    = $onText.ToUpper()
+        $btn.Foreground = $App.UI.brGreen
+    } else {
+        $btn.Content    = $offText.ToUpper()
+        $btn.Foreground = $App.UI.brRed
+    }
+}
+
+function Update-RoutingToggle {
+    $App.UI.btnProxyMode.Background  = $App.UI.brInactiveRouting
+    $App.UI.btnProxyMode.Foreground  = $App.UI.brGray
+    $App.UI.btnClearProxy.Background = $App.UI.brInactiveRouting
+    $App.UI.btnClearProxy.Foreground = $App.UI.brGray
+    $App.UI.btnVpnMode.Background    = $App.UI.brInactiveRouting
+    $App.UI.btnVpnMode.Foreground    = $App.UI.brGray
+    $App.UI.btnVpnMode.Cursor        = [System.Windows.Input.Cursors]::Hand
+    $App.UI.vpnToolTip.Content       = "Route your entire system's network globally through the secure tunnel."
+    $App.UI.vpnToolTip.Visibility    = "Visible"
+    
+    switch ($App.Config.lastXrayMode) {
+        "Proxy Mode"  { $App.UI.btnProxyMode.Background  = $App.UI.brActiveRouting; $App.UI.btnProxyMode.Foreground  = $App.UI.brWhite }
+        "VPN Mode"    { $App.UI.btnVpnMode.Background    = $App.UI.brActiveRouting; $App.UI.btnVpnMode.Foreground    = $App.UI.brWhite }
+        "Clear Proxy" { $App.UI.btnClearProxy.Background = $App.UI.brActiveRouting; $App.UI.btnClearProxy.Foreground = $App.UI.brWhite }
+    }
+    
+    $App.UI.btnDirectLbl.IsEnabled = $true; $App.UI.btnDirectLbl.Opacity = 1.0
+    $App.UI.btnDirectTog.IsEnabled = $true; $App.UI.btnDirectTog.Opacity = 1.0
+}
+
+function Evaluate-ProxyExclusivity {
+    $ok = -not $App.Config.enableTorDoh
+    $App.UI.btnOutboundLbl.IsEnabled = $ok; $App.UI.btnOutboundLbl.Opacity = if ($ok) { 1.0 } else { 0.5 }
+    $App.UI.btnOutboundTog.IsEnabled = $ok; $App.UI.btnOutboundTog.Opacity = if ($ok) { 1.0 } else { 0.5 }
+}
+
+#  INITIAL UI STATE
+function Force-InitialColors {
+    Set-AutoConnectState $false $false
+    Set-AdvState $App.State.isAdvancedOpen
+    Set-WpfToggleState $App.UI.btnV2rayTog $App.Config.enableV2rayChain "Enabled" "Disabled"
+    Set-WpfToggleState $App.UI.btnDirectTog $App.Config.enableDirect "Enabled" "Disabled"
+    Set-WpfToggleState $App.UI.btnOutboundTog $App.Config.enableOutboundProxy "Enabled" "Disabled"
+    Set-WpfToggleState $App.UI.btnDohTog ($App.Config.enableTorDoh -or $App.Config.enableUpstreamDoh) "Enabled" "Disabled"
+    Set-WpfToggleState $App.UI.btnBootTog $App.Config.launchOnBoot "Enabled" "Disabled"
+    Set-WpfToggleState $App.UI.btnDebugTog $App.Config.debugMode "Enabled" "Disabled"
+    Set-WpfToggleState $App.UI.btnTrayTog $App.Config.minimizeToTray "Enabled" "Disabled"
+    Set-WpfToggleState $App.UI.btnAdBlockTog $App.Config.enableAdBlock "Enabled" "Disabled"
+    Set-WpfToggleState $App.UI.btnLogsTog $App.State.isLogsOpen "HIDE" "SHOW"
+}
+
+Force-InitialColors
+Update-RoutingToggle
+Evaluate-ProxyExclusivity
+
+#  POPUP DIALOGS
 function Show-DirectRulesDialog {
     $ix = @"
         <TextBlock Name="lblDomains" Text="Domains or IPs to bypass Tor (Comma Separated | Proxy Mode):" Canvas.Left="15" Canvas.Top="35" FontSize="11" Foreground="{StaticResource TextMain}"/>
@@ -1292,34 +1323,34 @@ function Show-DirectRulesDialog {
 "@
     $onLoad = {
         param($d)
-        $d.FindName("txtDomains").Text = $global:lastManualSplit
-        $d.FindName("txtApps").Text    = $global:lastAppSplit
-        $d.FindName("txtBlock").Text   = $global:lastBlockSplit
-        if ($global:lastXrayMode -eq "VPN Mode") {
+        $d.FindName("txtDomains").Text = $App.Config.lastManualSplit
+        $d.FindName("txtApps").Text    = $App.Config.lastAppSplit
+        $d.FindName("txtBlock").Text   = $App.Config.lastBlockSplit
+        if ($App.Config.lastXrayMode -eq "VPN Mode") {
             $d.FindName("txtDomains").IsEnabled = $false
             $d.FindName("txtDomains").Opacity   = 0.3
-            $d.FindName("lblDomains").Text    = "Domains & IPs (Disabled in VPN Mode - Use App Bypass below)"
-            $d.FindName("lblDomains").Opacity = 0.5
+            $d.FindName("lblDomains").Text      = "Domains & IPs (Disabled in VPN Mode - Use App Bypass below)"
+            $d.FindName("lblDomains").Opacity   = 0.5
             $d.FindName("txtApps").Focus() | Out-Null
-        } else {
-            $d.FindName("txtDomains").Focus() | Out-Null
-        }
+        } else { $d.FindName("txtDomains").Focus() | Out-Null }
     }
     $onSave = {
         param($d)
-        $global:lastManualSplit = $d.FindName("txtDomains").Text.Trim()
-        $global:lastAppSplit    = $d.FindName("txtApps").Text.Trim()
-        $global:lastBlockSplit  = $d.FindName("txtBlock").Text.Trim()
+        $App.Config.lastManualSplit = $d.FindName("txtDomains").Text.Trim()
+        $App.Config.lastAppSplit    = $d.FindName("txtApps").Text.Trim()
+        $App.Config.lastBlockSplit  = $d.FindName("txtBlock").Text.Trim()
     }
+    
     $result = Show-AppDialog -Title "SPLIT TUNNELING AND PRIVACY ENGINE" -Width 480 -Height 400 -InnerXaml $ix -OnLoad $onLoad -OnSave $onSave
     if ($result) {
-        $hasRulesNow = -not [string]::IsNullOrWhiteSpace($global:lastManualSplit) -or -not [string]::IsNullOrWhiteSpace($global:lastAppSplit)
-        if (-not $global:enableDirect -and $hasRulesNow) {
-            $global:enableDirect = $true
-            if ($null -ne $btnDirectTog) { Set-WpfToggleState $btnDirectTog $true }
+        $hasRules = -not [string]::IsNullOrWhiteSpace($App.Config.lastManualSplit) -or
+                    -not [string]::IsNullOrWhiteSpace($App.Config.lastAppSplit)
+        if (-not $App.Config.enableDirect -and $hasRules) {
+            $App.Config.enableDirect = $true
+            Set-WpfToggleState $App.UI.btnDirectTog $true
         }
         Save-Config
-        if ($global:isConnected) { Restart-Xray $global:lastXrayMode }
+        if ($App.State.isConnected) { Restart-Xray $App.Config.lastXrayMode }
     }
     return $result
 }
@@ -1333,13 +1364,12 @@ function Show-CustomBridgeDialog {
     $onLoad = {
         param($d)
         $t = $d.FindName("txtInput")
-        $t.Text = $global:customBridgeLine
-        $t.Focus() | Out-Null
-        $t.CaretIndex = $t.Text.Length
+        $t.Text = $App.Config.customBridgeLine
+        $t.Focus() | Out-Null; $t.CaretIndex = $t.Text.Length
     }
     $onSave = {
         param($d)
-        $global:customBridgeLine = $d.FindName("txtInput").Text.Trim()
+        $App.Config.customBridgeLine = $d.FindName("txtInput").Text.Trim()
     }
     return Show-AppDialog -Title "CUSTOM BRIDGE CONFIGURATIONS" -Width 420 -Height 240 -InnerXaml $ix -OnLoad $onLoad -OnSave $onSave
 }
@@ -1355,9 +1385,8 @@ function Show-V2rayDialog {
     $onLoad = {
         param($d)
         $t = $d.FindName("txtInput")
-        $t.Text = $global:v2rayChainJson
-        $t.Focus() | Out-Null
-        $t.CaretIndex = $t.Text.Length
+        $t.Text = $App.Config.v2rayChainJson
+        $t.Focus() | Out-Null; $t.CaretIndex = $t.Text.Length
         $d.FindName("btnImport").Add_Click({
             $fd = New-Object System.Windows.Forms.OpenFileDialog
             $fd.Filter = "JSON Files (*.json)|*.json|All Files (*.*)|*.*"
@@ -1367,15 +1396,15 @@ function Show-V2rayDialog {
     $onSave = {
         param($d)
         $txt = $d.FindName("txtInput").Text
-        if ([string]::IsNullOrWhiteSpace($txt)) { $global:v2rayChainJson = ""; return $true }
-        try { 
-            $parsed  = $txt | ConvertFrom-Json 
+        if ([string]::IsNullOrWhiteSpace($txt)) { $App.Config.v2rayChainJson = ""; return $true }
+        try {
+            $parsed   = $txt | ConvertFrom-Json
             $testNode = if ($null -ne $parsed.outbounds) { $parsed.outbounds[0] } else { $parsed }
             if (-not $testNode.protocol) { throw "Missing Protocol" }
-            $global:v2rayChainJson = $txt.Trim()
+            $App.Config.v2rayChainJson = $txt.Trim()
             return $true
-        } catch { 
-            [System.Windows.Forms.MessageBox]::Show("Invalid Xray JSON syntax!", "Validation Error", 0, 16) 
+        } catch {
+            [System.Windows.Forms.MessageBox]::Show("Invalid Xray JSON syntax!", "Validation Error", 0, 16)
             return $false
         }
     }
@@ -1389,11 +1418,10 @@ function Show-OutboundProxyDialog {
         </Border>
         <Rectangle Canvas.Left="134" Canvas.Top="35" Width="1" Height="26" Fill="{StaticResource BorderLight}"/>
         <ComboBox Name="cmbProxyType" Canvas.Left="135" Canvas.Top="35" Width="120" Height="26" FontSize="11" Style="{StaticResource DarkComboBoxJoined}">
-            <ComboBoxItem Content="SOCKS5"/>
-            <ComboBoxItem Content="HTTPS"/>
+            <ComboBoxItem Content="SOCKS5"/><ComboBoxItem Content="HTTPS"/>
         </ComboBox>
         <TextBlock Text="Address/IP:" Canvas.Left="15" Canvas.Top="70" FontSize="11" Foreground="{StaticResource TextMuted}"/>
-        <TextBox Name="txtAddr" Canvas.Left="15" Canvas.Top="88" Width="240" Height="26" Background="{StaticResource BgInput}" Foreground="{StaticResource TextGreen}" BorderBrush="{StaticResource BorderMain}" BorderThickness="1" Padding="4" FontSize="12" FontFamily="Consolas" VerticalContentAlignment="Center"/>        
+        <TextBox Name="txtAddr" Canvas.Left="15" Canvas.Top="88" Width="240" Height="26" Background="{StaticResource BgInput}" Foreground="{StaticResource TextGreen}" BorderBrush="{StaticResource BorderMain}" BorderThickness="1" Padding="4" FontSize="12" FontFamily="Consolas" VerticalContentAlignment="Center"/>
         <TextBlock Text="Port:" Canvas.Left="270" Canvas.Top="70" FontSize="11" Foreground="{StaticResource TextMuted}"/>
         <TextBox Name="txtPort" Canvas.Left="270" Canvas.Top="88" Width="95" Height="26" Background="{StaticResource BgInput}" Foreground="{StaticResource TextGreen}" BorderBrush="{StaticResource BorderMain}" BorderThickness="1" Padding="4" FontSize="12" FontFamily="Consolas" VerticalContentAlignment="Center"/>
         <Border BorderBrush="{StaticResource BorderLight}" BorderThickness="1" CornerRadius="4,0,0,4" Canvas.Left="15" Canvas.Top="128" Width="120" Height="26">
@@ -1401,8 +1429,7 @@ function Show-OutboundProxyDialog {
         </Border>
         <Rectangle Canvas.Left="134" Canvas.Top="128" Width="1" Height="26" Fill="{StaticResource BorderLight}"/>
         <ComboBox Name="cmbAuth" Canvas.Left="135" Canvas.Top="128" Width="120" Height="26" FontSize="11" Style="{StaticResource DarkComboBoxJoined}">
-            <ComboBoxItem Content="Disabled"/>
-            <ComboBoxItem Content="Enabled"/>
+            <ComboBoxItem Content="Disabled"/><ComboBoxItem Content="Enabled"/>
         </ComboBox>
         <Canvas Name="panAuth" Canvas.Left="15" Canvas.Top="165" Visibility="Hidden" Opacity="0">
             <TextBlock Text="Username:" Canvas.Left="0" Canvas.Top="0" FontSize="11" Foreground="{StaticResource TextMuted}"/>
@@ -1415,70 +1442,68 @@ function Show-OutboundProxyDialog {
 "@
     $onLoad = {
         param($dlg)
-        $cmbProxyType = $dlg.FindName("cmbProxyType")
-        $cmbAuth      = $dlg.FindName("cmbAuth")
-        $txtAddr      = $dlg.FindName("txtAddr")
-        $txtPort      = $dlg.FindName("txtPort")
-        $txtUser      = $dlg.FindName("txtUser")
-        $txtPass      = $dlg.FindName("txtPass")
-        $panAuth      = $dlg.FindName("panAuth")
-        $btnOk        = $dlg.FindName("btnOk")
-        $btnCancel    = $dlg.FindName("btnCancel")
-        $borderMain   = $dlg.FindName("borderMain")
-        $script:tempType = if ([string]::IsNullOrEmpty($global:outboundProxyType)) { "SOCKS5" } else { $global:outboundProxyType }
-        $txtAddr.Text = $global:outboundProxyAddress
-        $txtPort.Text = $global:outboundProxyPort
-        $txtUser.Text = $global:outboundProxyUser
-        $txtPass.Text = $global:outboundProxyPass
-        foreach ($item in $cmbProxyType.Items) { if ($item.Content -eq $script:tempType) { $cmbProxyType.SelectedItem = $item; break } }
-        $authTarget = if ($global:enableOutboundAuth) { "Enabled" } else { "Disabled" }
+        $cmbProxyType = $dlg.FindName("cmbProxyType"); $cmbAuth   = $dlg.FindName("cmbAuth")
+        $txtAddr      = $dlg.FindName("txtAddr");       $txtPort   = $dlg.FindName("txtPort")
+        $txtUser      = $dlg.FindName("txtUser");       $txtPass   = $dlg.FindName("txtPass")
+        $panAuth      = $dlg.FindName("panAuth");       $btnOk     = $dlg.FindName("btnOk")
+        $btnCancel    = $dlg.FindName("btnCancel");     $borderMain = $dlg.FindName("borderMain")
+        
+        $App.State.tempProxyType = if ([string]::IsNullOrEmpty($App.Config.outboundProxyType)) { "SOCKS5" } else { $App.Config.outboundProxyType }
+        $txtAddr.Text = $App.Config.outboundProxyAddress
+        $txtPort.Text = $App.Config.outboundProxyPort
+        $txtUser.Text = $App.Config.outboundProxyUser
+        $txtPass.Text = $App.Config.outboundProxyPass
+        
+        foreach ($item in $cmbProxyType.Items) { if ($item.Content -eq $App.State.tempProxyType) { $cmbProxyType.SelectedItem = $item; break } }
+        $authTarget = if ($App.Config.enableOutboundAuth) { "Enabled" } else { "Disabled" }
         foreach ($item in $cmbAuth.Items) { if ($item.Content -eq $authTarget) { $cmbAuth.SelectedItem = $item; break } }
+        
         $isFirstLoad = $true
-        $evaluateAuthView = {
+        $evalAuth = {
             $isEnabled  = ($null -ne $cmbAuth.SelectedItem -and $cmbAuth.SelectedItem.Content -eq "Enabled")
-            $targetH      = if ($isEnabled) { 320.0 } else { 263.0 }
-            $targetBorderH = if ($isEnabled) { 267.0 } else { 210.0 }
-            $targetBtnTop  = if ($isEnabled) { 225.0 } else { 168.0 }
-            $targetOpac   = if ($isEnabled) { 1.0   } else { 0.0   }
+            $targetH    = if ($isEnabled) { 320.0 } else { 263.0 }
+            $tBorderH   = if ($isEnabled) { 267.0 } else { 210.0 }
+            $tBtnTop    = if ($isEnabled) { 225.0 } else { 168.0 }
+            $tOpac      = if ($isEnabled) { 1.0   } else { 0.0   }
             if ($isFirstLoad) {
-                $dlg.Height = $targetH; $borderMain.Height = $targetBorderH
-                $btnOk.SetValue([System.Windows.Controls.Canvas]::TopProperty, [double]$targetBtnTop)
-                $btnCancel.SetValue([System.Windows.Controls.Canvas]::TopProperty, [double]$targetBtnTop)
-                $panAuth.Opacity    = $targetOpac
+                $dlg.Height = $targetH; $borderMain.Height = $tBorderH
+                $btnOk.SetValue(    [System.Windows.Controls.Canvas]::TopProperty, [double]$tBtnTop)
+                $btnCancel.SetValue([System.Windows.Controls.Canvas]::TopProperty, [double]$tBtnTop)
+                $panAuth.Opacity = $tOpac
                 $panAuth.Visibility = if ($isEnabled) { "Visible" } else { "Hidden" }
             } else {
                 if ($isEnabled) { $panAuth.Visibility = "Visible" }
                 $dur = New-Object System.Windows.Duration([TimeSpan]::FromMilliseconds(250))
-                $dlg.BeginAnimation([System.Windows.Window]::HeightProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation([double]$targetH, $dur)))
-                $borderMain.BeginAnimation([System.Windows.FrameworkElement]::HeightProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation([double]$targetBorderH, $dur)))
-                $btnOk.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation([double]$targetBtnTop, $dur)))
-                $btnCancel.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation([double]$targetBtnTop, $dur)))
-                $panAuth.BeginAnimation([System.Windows.UIElement]::OpacityProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation([double]$targetOpac, $dur)))
+                $dlg.BeginAnimation(       [System.Windows.Window]::HeightProperty,                (New-Object System.Windows.Media.Animation.DoubleAnimation([double]$targetH, $dur)))
+                $borderMain.BeginAnimation([System.Windows.FrameworkElement]::HeightProperty,      (New-Object System.Windows.Media.Animation.DoubleAnimation([double]$tBorderH, $dur)))
+                $btnOk.BeginAnimation(     [System.Windows.Controls.Canvas]::TopProperty,          (New-Object System.Windows.Media.Animation.DoubleAnimation([double]$tBtnTop, $dur)))
+                $btnCancel.BeginAnimation( [System.Windows.Controls.Canvas]::TopProperty,          (New-Object System.Windows.Media.Animation.DoubleAnimation([double]$tBtnTop, $dur)))
+                $panAuth.BeginAnimation(   [System.Windows.UIElement]::OpacityProperty,            (New-Object System.Windows.Media.Animation.DoubleAnimation([double]$tOpac, $dur)))
                 if (-not $isEnabled) {
-                    $hideTimer = New-Object System.Windows.Threading.DispatcherTimer
-                    $hideTimer.Interval = [TimeSpan]::FromMilliseconds(250)
-                    $hideTimer.add_Tick({ $hideTimer.Stop(); if ($cmbAuth.SelectedItem.Content -eq "Disabled") { $panAuth.Visibility = "Hidden" } }.GetNewClosure())
-                    $hideTimer.Start()
+                    $ht = New-Object System.Windows.Threading.DispatcherTimer
+                    $ht.Interval = [TimeSpan]::FromMilliseconds(250)
+                    $ht.add_Tick({ $ht.Stop(); if ($cmbAuth.SelectedItem.Content -eq "Disabled") { $panAuth.Visibility = "Hidden" } }.GetNewClosure())
+                    $ht.Start()
                 }
             }
         }.GetNewClosure()
-        $cmbAuth.add_SelectionChanged({ & $evaluateAuthView }.GetNewClosure())
-        $cmbProxyType.add_SelectionChanged({ 
-            if ($null -ne $cmbProxyType.SelectedItem) { $script:tempType = $cmbProxyType.SelectedItem.Content }
+        $cmbAuth.add_SelectionChanged({ & $evalAuth }.GetNewClosure())
+        $cmbProxyType.add_SelectionChanged({
+            if ($null -ne $cmbProxyType.SelectedItem) { $App.State.tempProxyType = $cmbProxyType.SelectedItem.Content }
         }.GetNewClosure())
-        & $evaluateAuthView
+        & $evalAuth
         $isFirstLoad = $false
         $txtAddr.Focus() | Out-Null; $txtAddr.CaretIndex = $txtAddr.Text.Length
     }
     $onSave = {
         param($d)
-        $global:outboundProxyAddress = $d.FindName("txtAddr").Text.Trim()
-        $global:outboundProxyPort    = $d.FindName("txtPort").Text.Trim()
-        $global:outboundProxyType    = $script:tempType
-        $cmbAuth = $d.FindName("cmbAuth")
-        $global:enableOutboundAuth   = ($null -ne $cmbAuth.SelectedItem -and $cmbAuth.SelectedItem.Content -eq "Enabled")
-        $global:outboundProxyUser    = $d.FindName("txtUser").Text.Trim()
-        $global:outboundProxyPass    = $d.FindName("txtPass").Text.Trim()
+        $App.Config.outboundProxyAddress = $d.FindName("txtAddr").Text.Trim()
+        $App.Config.outboundProxyPort    = $d.FindName("txtPort").Text.Trim()
+        $App.Config.outboundProxyType    = $App.State.tempProxyType
+        $cmbA = $d.FindName("cmbAuth")
+        $App.Config.enableOutboundAuth   = ($null -ne $cmbA.SelectedItem -and $cmbA.SelectedItem.Content -eq "Enabled")
+        $App.Config.outboundProxyUser    = $d.FindName("txtUser").Text.Trim()
+        $App.Config.outboundProxyPass    = $d.FindName("txtPass").Text.Trim()
     }
     return Show-AppDialog -Title "OUTBOUND PROXY CONFIGURATION" -Width 420 -Height 280 -InnerXaml $ix -OnLoad $onLoad -OnSave $onSave
 }
@@ -1534,54 +1559,55 @@ function Show-DohDialog {
 "@
     $onLoad = {
         param($dlg)
-        $bc = New-Object System.Windows.Media.BrushConverter
-        $textGreen = $bc.ConvertFromString("#68D391")
-        $textRed   = $bc.ConvertFromString("#E53E3E")
-        $textGray  = $bc.ConvertFromString("#A0AEC0")
-        $lblWarn = $dlg.FindName("lblWarn"); $lblTor = $dlg.FindName("lblTor"); $borTor = $dlg.FindName("borTor")
-        $btnTorTog = $dlg.FindName("btnTorTog"); $txtTorDoh = $dlg.FindName("txtTorDoh")
-        $lblUp = $dlg.FindName("lblUp"); $borUp = $dlg.FindName("borUp")
-        $btnUpTog = $dlg.FindName("btnUpTog"); $txtUpDoh = $dlg.FindName("txtUpDoh")
-        $lblHint = $dlg.FindName("lblHint"); $btnOk = $dlg.FindName("btnOk"); $btnCancel = $dlg.FindName("btnCancel")
-        $borderMain = $dlg.FindName("borderMain")
-        $txtTorDoh.Text = $global:torDohUrl; $txtUpDoh.Text = $global:upstreamDohUrl
-        $btnUpTog.Content   = if ($global:enableUpstreamDoh) { "ENABLED" } else { "DISABLED" }
-        $btnUpTog.Foreground = if ($global:enableUpstreamDoh) { $textGreen } else { $textRed }
-        if ($global:enableOutboundProxy) {
-            $dlg.Height = 320; $borderMain.Height = 254
-            $lblWarn.Visibility = "Visible"
+        $_bc2 = New-Object System.Windows.Media.BrushConverter
+        $tGreen = $_bc2.ConvertFromString("#68D391"); $tRed = $_bc2.ConvertFromString("#E53E3E"); $tGray = $_bc2.ConvertFromString("#A0AEC0")
+        
+        $lblWarn   = $dlg.FindName("lblWarn");   $lblTor    = $dlg.FindName("lblTor")
+        $borTor    = $dlg.FindName("borTor");    $btnTorTog = $dlg.FindName("btnTorTog")
+        $txtTorDoh = $dlg.FindName("txtTorDoh"); $lblUp     = $dlg.FindName("lblUp")
+        $borUp     = $dlg.FindName("borUp");     $btnUpTog  = $dlg.FindName("btnUpTog")
+        $txtUpDoh  = $dlg.FindName("txtUpDoh");  $lblHint   = $dlg.FindName("lblHint")
+        $btnOk2    = $dlg.FindName("btnOk");     $btnC2     = $dlg.FindName("btnCancel")
+        $bMain     = $dlg.FindName("borderMain")
+        
+        $txtTorDoh.Text = $App.Config.torDohUrl; $txtUpDoh.Text = $App.Config.upstreamDohUrl
+        $btnUpTog.Content   = if ($App.Config.enableUpstreamDoh) { "ENABLED" } else { "DISABLED" }
+        $btnUpTog.Foreground = if ($App.Config.enableUpstreamDoh) { $tGreen } else { $tRed }
+        
+        if ($App.Config.enableOutboundProxy) {
+            $dlg.Height = 320; $bMain.Height = 254; $lblWarn.Visibility = "Visible"
             $lblTor.SetValue([System.Windows.Controls.Canvas]::TopProperty, [double]55)
             $borTor.SetValue([System.Windows.Controls.Canvas]::TopProperty, [double]75)
-            $lblUp.SetValue([System.Windows.Controls.Canvas]::TopProperty, [double]110)
-            $borUp.SetValue([System.Windows.Controls.Canvas]::TopProperty, [double]130)
+            $lblUp.SetValue( [System.Windows.Controls.Canvas]::TopProperty, [double]110)
+            $borUp.SetValue( [System.Windows.Controls.Canvas]::TopProperty, [double]130)
             $lblHint.SetValue([System.Windows.Controls.Canvas]::TopProperty, [double]165)
-            $btnOk.SetValue([System.Windows.Controls.Canvas]::TopProperty, [double]212)
-            $btnCancel.SetValue([System.Windows.Controls.Canvas]::TopProperty, [double]212)
-            $btnTorTog.Content = "DISABLED"; $btnTorTog.Foreground = $textGray
+            $btnOk2.SetValue( [System.Windows.Controls.Canvas]::TopProperty, [double]212)
+            $btnC2.SetValue(  [System.Windows.Controls.Canvas]::TopProperty, [double]212)
+            $btnTorTog.Content = "DISABLED"; $btnTorTog.Foreground = $tGray
             $btnTorTog.IsEnabled = $false; $txtTorDoh.IsEnabled = $false
             $borTor.Opacity = 0.3; $lblTor.Opacity = 0.5
         } else {
-            $btnTorTog.Content   = if ($global:enableTorDoh) { "ENABLED" } else { "DISABLED" }
-            $btnTorTog.Foreground = if ($global:enableTorDoh) { $textGreen } else { $textRed }
+            $btnTorTog.Content    = if ($App.Config.enableTorDoh) { "ENABLED" } else { "DISABLED" }
+            $btnTorTog.Foreground = if ($App.Config.enableTorDoh) { $tGreen } else { $tRed }
             $btnTorTog.Add_Click({
-                if ($this.Content -eq "DISABLED") { $this.Content = "ENABLED"; $this.Foreground = $textGreen } 
-                else { $this.Content = "DISABLED"; $this.Foreground = $textRed }
+                if ($this.Content -eq "DISABLED") { $this.Content = "ENABLED"; $this.Foreground = $tGreen }
+                else { $this.Content = "DISABLED"; $this.Foreground = $tRed }
             }.GetNewClosure())
         }
         $btnUpTog.Add_Click({
-            if ($this.Content -eq "DISABLED") { $this.Content = "ENABLED"; $this.Foreground = $textGreen } 
-            else { $this.Content = "DISABLED"; $this.Foreground = $textRed }
+            if ($this.Content -eq "DISABLED") { $this.Content = "ENABLED"; $this.Foreground = $tGreen }
+            else { $this.Content = "DISABLED"; $this.Foreground = $tRed }
         }.GetNewClosure())
         $txtTorDoh.Focus() | Out-Null; $txtTorDoh.CaretIndex = $txtTorDoh.Text.Length
     }
     $onSave = {
         param($d)
-        $global:enableTorDoh = ($d.FindName("btnTorTog").Content -eq "ENABLED")
+        $App.Config.enableTorDoh = ($d.FindName("btnTorTog").Content -eq "ENABLED")
         $tDoh = $d.FindName("txtTorDoh").Text
-        if (-not [string]::IsNullOrWhiteSpace($tDoh)) { $global:torDohUrl = $tDoh.Trim() }
-        $global:enableUpstreamDoh = ($d.FindName("btnUpTog").Content -eq "ENABLED")
+        if (-not [string]::IsNullOrWhiteSpace($tDoh)) { $App.Config.torDohUrl = $tDoh.Trim() }
+        $App.Config.enableUpstreamDoh = ($d.FindName("btnUpTog").Content -eq "ENABLED")
         $uDoh = $d.FindName("txtUpDoh").Text
-        if (-not [string]::IsNullOrWhiteSpace($uDoh)) { $global:upstreamDohUrl = $uDoh.Trim() }
+        if (-not [string]::IsNullOrWhiteSpace($uDoh)) { $App.Config.upstreamDohUrl = $uDoh.Trim() }
     }
     return Show-AppDialog -Title "DNS SETTINGS" -Width 420 -Height 300 -InnerXaml $ix -OnLoad $onLoad -OnSave $onSave
 }
@@ -1595,185 +1621,138 @@ function Show-ExitNodeDialog {
 "@
     $onLoad = {
         param($d)
-        $cmbCountries = $d.FindName("cmbCountries")
-        $countries = [ordered]@{ 
+        $cmb = $d.FindName("cmbCountries")
+        $countries = [ordered]@{
             "Argentina"="ar";"Australia"="au";"Austria"="at";"Brazil"="br";"Canada"="ca";
-            "Finland"="fi";"France"="fr";"Germany"="de";"Hong Kong"="hk";
-            "Iceland"="is";"India"="in";"Iran"="ir";"Italy"="it";"Japan"="jp";
-            "Mexico"="mx";"Netherlands"="nl";"New Zealand"="nz";"Romania"="ro";
-            "Singapore"="sg";"South Africa"="za";"South Korea"="kr";"Spain"="es";
-            "Sweden"="se";"Switzerland"="ch";"United Arab Emirates"="ae";"United Kingdom"="uk";"United States"="us"
+            "Finland"="fi";"France"="fr";"Germany"="de";"Hong Kong"="hk";"Iceland"="is";
+            "India"="in";"Iran"="ir";"Italy"="it";"Japan"="jp";"Mexico"="mx";
+            "Netherlands"="nl";"New Zealand"="nz";"Romania"="ro";"Singapore"="sg";
+            "South Africa"="za";"South Korea"="kr";"Spain"="es";"Sweden"="se";
+            "Switzerland"="ch";"United Arab Emirates"="ae";"United Kingdom"="uk";"United States"="us"
         }
-        foreach ($c in $countries.Keys) { 
+        foreach ($c in $countries.Keys) {
             $cbi = New-Object System.Windows.Controls.ComboBoxItem
-            $cbi.Content = "$c ($($countries[$c].ToUpper()))"
-            $cbi.Tag = $countries[$c]
-            $cmbCountries.Items.Add($cbi) | Out-Null
+            $cbi.Content = "$c ($($countries[$c].ToUpper()))"; $cbi.Tag = $countries[$c]
+            $cmb.Items.Add($cbi) | Out-Null
         }
-        foreach ($item in $cmbCountries.Items) {
-            if ($item.Tag -eq $global:customExitCountry) { $cmbCountries.SelectedItem = $item; break }
-        }
-        if ($null -eq $cmbCountries.SelectedItem -and $cmbCountries.Items.Count -gt 0) { $cmbCountries.SelectedIndex = 0 }
+        foreach ($item in $cmb.Items) { if ($item.Tag -eq $App.Config.customExitCountry) { $cmb.SelectedItem = $item; break } }
+        if ($null -eq $cmb.SelectedItem -and $cmb.Items.Count -gt 0) { $cmb.SelectedIndex = 0 }
     }
     $onSave = {
         param($d)
-        $global:customExitCountry = $d.FindName("cmbCountries").SelectedItem.Tag.ToLower()
+        $App.Config.customExitCountry = $d.FindName("cmbCountries").SelectedItem.Tag.ToLower()
     }
     return Show-AppDialog -Title "CUSTOM EXIT-NODE ROUTING" -Width 420 -Height 210 -InnerXaml $ix -OnLoad $onLoad -OnSave $onSave
 }
 
-# CORE LOGIC
+#  CORE LOGIC
 function Save-Config {
-    $configData = [ordered]@{
-        "AutoStart"            = [bool]$script:autoStart
-        "LaunchOnBoot"         = [bool]$script:launchOnBoot
-        "LastConfig"           = if ($comboConfig.SelectedItem) { $comboConfig.SelectedItem.Tag } else { $lastConfig }
-        "SelectedBridge"       = $comboBridge.SelectedItem.Tag
-        "InstanceCount"        = [int]$comboCount.SelectedItem.Tag
-        "XrayMode"             = $global:lastXrayMode
-        "ManualSplit"          = $global:lastManualSplit
-        "AppSplit"             = $global:lastAppSplit
-        "BlockSplit"           = $global:lastBlockSplit
-        "EnableDirect"         = [bool]$global:enableDirect
-        "CustomBridgeLine"     = $global:customBridgeLine
-        "EnableV2rayChain"     = [bool]$global:enableV2rayChain
-        "V2rayChainJson"       = $global:v2rayChainJson
-        "EnableOutboundProxy"  = [bool]$global:enableOutboundProxy
-        "OutboundProxyAddress" = $global:outboundProxyAddress
-        "OutboundProxyPort"    = $global:outboundProxyPort
-        "OutboundProxyType"    = $global:outboundProxyType
-        "OutboundProxyUser"    = $global:outboundProxyUser
-        "OutboundProxyPass"    = $global:outboundProxyPass
-        "EnableOutboundAuth"   = [bool]$global:enableOutboundAuth
-        "EnableTorDoh"         = [bool]$global:enableTorDoh
-        "TorDohUrl"            = $global:torDohUrl
-        "EnableUpstreamDoh"    = [bool]$global:enableUpstreamDoh
-        "UpstreamDohUrl"       = $global:upstreamDohUrl
-        "CustomExitCountry"    = $global:customExitCountry
-        "MinimizeToTray"       = [bool]$global:minimizeToTray
-        "EnableAdBlock"        = [bool]$global:enableAdBlock
+    $data = [ordered]@{
+        AutoStart            = [bool]$App.Config.autoStart
+        LaunchOnBoot         = [bool]$App.Config.launchOnBoot
+        LastConfig           = if ($App.UI.comboConfig.SelectedItem) { $App.UI.comboConfig.SelectedItem.Tag } else { $App.Config.lastConfig }
+        SelectedBridge       = $App.UI.comboBridge.SelectedItem.Tag
+        InstanceCount        = [int]$App.UI.comboCount.SelectedItem.Tag
+        XrayMode             = $App.Config.lastXrayMode
+        ManualSplit          = $App.Config.lastManualSplit
+        AppSplit             = $App.Config.lastAppSplit
+        BlockSplit           = $App.Config.lastBlockSplit
+        EnableDirect         = [bool]$App.Config.enableDirect
+        CustomBridgeLine     = $App.Config.customBridgeLine
+        EnableV2rayChain     = [bool]$App.Config.enableV2rayChain
+        V2rayChainJson       = $App.Config.v2rayChainJson
+        EnableOutboundProxy  = [bool]$App.Config.enableOutboundProxy
+        OutboundProxyAddress = $App.Config.outboundProxyAddress
+        OutboundProxyPort    = $App.Config.outboundProxyPort
+        OutboundProxyType    = $App.Config.outboundProxyType
+        OutboundProxyUser    = $App.Config.outboundProxyUser
+        OutboundProxyPass    = $App.Config.outboundProxyPass
+        EnableOutboundAuth   = [bool]$App.Config.enableOutboundAuth
+        EnableTorDoh         = [bool]$App.Config.enableTorDoh
+        TorDohUrl            = $App.Config.torDohUrl
+        EnableUpstreamDoh    = [bool]$App.Config.enableUpstreamDoh
+        UpstreamDohUrl       = $App.Config.upstreamDohUrl
+        CustomExitCountry    = $App.Config.customExitCountry
+        MinimizeToTray       = [bool]$App.Config.minimizeToTray
+        EnableAdBlock        = [bool]$App.Config.enableAdBlock
     }
-    try {
-        $configData | ConvertTo-Json -Depth 10 | Set-Content -Path $cfgFile -Force
-    } catch {
-        Write-Host "Failed to save configuration: $($_.Exception.Message)"
-    }
+    try { $data | ConvertTo-Json -Depth 10 | Set-Content -Path $App.Config.cfgFile -Force }
+    catch { Write-Host "Failed to save config: $($_.Exception.Message)" }
 }
 
 function Write-TorOutboundDohConfig {
-    $dohUrl = $global:torDohUrl
-    $dnsServer = if ($dohUrl.StartsWith("https://")) {
+    $dohUrl    = $App.Config.torDohUrl
+    $dnsAddr   = if ($dohUrl.StartsWith("https://")) {
         try {
-            $uri  = [uri]$dohUrl
-            $host = $uri.Host
-            $path = if ($uri.AbsolutePath -eq "/") { "/dns-query" } else { $uri.PathAndQuery }
-            @{ address = "https://$host$path"; skipFallback = $true }
-        } catch {
-            @{ address = "https://cloudflare-dns.com/dns-query"; skipFallback = $true }
-        }
-    } else {
-        @{ address = $dohUrl; skipFallback = $true }
-    }
-
-    $dohConfig = @{
+            $uri     = [uri]$dohUrl
+            $dnsHost = $uri.Host
+            $dnsPath = if ($uri.AbsolutePath -eq "/") { "/dns-query" } else { $uri.PathAndQuery }
+            "https://$dnsHost$dnsPath"
+        } catch { "https://cloudflare-dns.com/dns-query" }
+    } else { $dohUrl }
+    
+    @{
         log      = @{ logLevel = "error" }
-        dns      = @{ servers = @($dnsServer.address) }
-        inbounds = @(
-            @{
-                listen   = "127.0.0.1"
-                port     = 10820
-                protocol = "socks"
-                settings = @{ udp = $false }
-            }
-        )
-        outbounds = @(
-            @{ tag = "direct"; protocol = "freedom"; settings = @{} }
-        )
-        routing = @{
-            domainStrategy = "UseIP"
-            rules          = @( @{ type = "field"; network = "tcp,udp"; outboundTag = "direct" } )
-        }
-    }
-    $dohConfig | ConvertTo-Json -Depth 10 | Set-Content (Get-AppPath "Data\Xray\tor-doh.json")
+        dns      = @{ servers  = @($dnsAddr) }
+        inbounds = @( @{ listen="127.0.0.1"; port=10820; protocol="socks"; settings=@{ udp=$false } } )
+        outbounds = @( @{ tag="direct"; protocol="freedom"; settings=@{} } )
+        routing  = @{ domainStrategy="UseIP"; rules=@( @{ type="field"; network="tcp,udp"; outboundTag="direct" } ) }
+    } | ConvertTo-Json -Depth 10 | Set-Content (Get-AppPath "Data\Xray\tor-doh.json")
 }
 
 function Write-XrayConfig {
-    $rules = @( 
-        @{ type="field"; ip=@("127.0.0.0/8","::1","10.0.0.0/8","172.16.0.0/12","192.168.0.0/16"); outboundTag="direct" } 
-    )
+    $rules = @( @{ type="field"; ip=@("127.0.0.0/8","::1","10.0.0.0/8","172.16.0.0/12","192.168.0.0/16"); outboundTag="direct" } )
     $blockDomains = @()
-    if ($global:enableAdBlock) {
-        $blockDomains += @("geosite:category-ads-all","domain:analytics.google.com","domain:google-analytics.com")
+    if ($App.Config.enableAdBlock) { $blockDomains += @("geosite:category-ads-all","domain:analytics.google.com","domain:google-analytics.com") }
+    if ($App.Config.enableDirect -and -not [string]::IsNullOrWhiteSpace($App.Config.lastBlockSplit)) {
+        $App.Config.lastBlockSplit.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ } | ForEach-Object { $blockDomains += "domain:$_" }
     }
-    if ($global:enableDirect -and -not [string]::IsNullOrWhiteSpace($global:lastBlockSplit)) {
-        $customBlocks = $global:lastBlockSplit.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
-        foreach ($bDomain in $customBlocks) { $blockDomains += "domain:$bDomain" }
-    }
-    if ($blockDomains.Count -gt 0) {
-        $rules += @{ type="field"; domain=$blockDomains; outboundTag="block" }
-    }
-    $domains = @(); $ips = @()
-    if ($global:enableDirect -and $global:lastXrayMode -ne "VPN Mode" -and $global:lastManualSplit -ne "") {
-        $list = $global:lastManualSplit.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
-        foreach ($item in $list) { 
-            if ($item -match "[a-zA-Z]") { $domains += "domain:$item" } else { $ips += $item } 
+    if ($blockDomains.Count -gt 0) { $rules += @{ type="field"; domain=$blockDomains; outboundTag="block" } }
+    if ($App.Config.enableDirect -and $App.Config.lastXrayMode -ne "VPN Mode" -and $App.Config.lastManualSplit) {
+        $domains = @(); $ips = @()
+        $App.Config.lastManualSplit.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ } | ForEach-Object {
+            if ($_ -match "[a-zA-Z]") { $domains += "domain:$_" } else { $ips += $_ }
         }
         if ($domains.Count -gt 0) { $rules += @{ type="field"; domain=$domains; outboundTag="direct" } }
-        if ($ips.Count -gt 0) { $rules += @{ type="field"; ip=$ips; outboundTag="direct" } }
+        if ($ips.Count    -gt 0) { $rules += @{ type="field"; ip=$ips;         outboundTag="direct" } }
     }
     $rules += @{ type="field"; network="tcp,udp"; outboundTag="proxy" }
-    $inboundArr = @( @{ 
-        listen   = "0.0.0.0"; port = 10818; protocol = "mixed"
-        settings = @{ udp = $true }
-        sniffing = @{ enabled = $true; destOverride = @("http","tls","quic","fakedns") } 
-    } )
+    $inbounds = @( @{ listen="0.0.0.0"; port=10818; protocol="mixed"; settings=@{ udp=$true }; sniffing=@{ enabled=$true; destOverride=@("http","tls","quic","fakedns") } } )
     $outbounds = @()
-    if ($global:enableV2rayChain -and -not [string]::IsNullOrWhiteSpace($global:v2rayChainJson)) {
+    if ($App.Config.enableV2rayChain -and -not [string]::IsNullOrWhiteSpace($App.Config.v2rayChainJson)) {
         try {
-            $v2rayParsed   = $global:v2rayChainJson | ConvertFrom-Json
-            $v2rayOutbound = if ($null -ne $v2rayParsed.outbounds) { 
-                $v2rayParsed.outbounds | Where-Object { $_.protocol -notin @("freedom","blackhole") } | Select-Object -First 1 
-            } else { $v2rayParsed }
-            $v2rayOutbound.tag = "proxy"
-            if ($null -ne $v2rayOutbound.streamSettings -and $null -ne $v2rayOutbound.streamSettings.tlsSettings) {
-                if (-not $v2rayOutbound.streamSettings.tlsSettings.psobject.properties.match('allowInsecure').Count) { 
-                    $v2rayOutbound.streamSettings.tlsSettings | Add-Member -MemberType NoteProperty -Name "allowInsecure" -Value $true 
-                } else { $v2rayOutbound.streamSettings.tlsSettings.allowInsecure = $true }
+            $v2p  = $App.Config.v2rayChainJson | ConvertFrom-Json
+            $v2ob = if ($null -ne $v2p.outbounds) { $v2p.outbounds | Where-Object { $_.protocol -notin @("freedom","blackhole") } | Select-Object -First 1 } else { $v2p }
+            $v2ob.tag = "proxy"
+            if ($null -ne $v2ob.streamSettings -and $null -ne $v2ob.streamSettings.tlsSettings) {
+                if (-not $v2ob.streamSettings.tlsSettings.psobject.properties.match('allowInsecure').Count) {
+                    $v2ob.streamSettings.tlsSettings | Add-Member -MemberType NoteProperty -Name "allowInsecure" -Value $true
+                } else { $v2ob.streamSettings.tlsSettings.allowInsecure = $true }
             }
-            if (-not $v2rayOutbound.psobject.properties.match('proxySettings').Count) { 
-                $v2rayOutbound | Add-Member -MemberType NoteProperty -Name "proxySettings" -Value @{ tag = "torProxy" } 
-            } else { $v2rayOutbound.proxySettings = @{ tag = "torProxy" } }
-            $outbounds += $v2rayOutbound
+            if (-not $v2ob.psobject.properties.match('proxySettings').Count) {
+                $v2ob | Add-Member -MemberType NoteProperty -Name "proxySettings" -Value @{ tag="torProxy" }
+            } else { $v2ob.proxySettings = @{ tag="torProxy" } }
+            $outbounds += $v2ob
             $outbounds += @{ tag="torProxy"; protocol="socks"; settings=@{ servers=@(@{ address="127.0.0.1"; port=10800 }) } }
-        } catch { 
-            $outbounds += @{ tag="proxy"; protocol="socks"; settings=@{ servers=@(@{ address="127.0.0.1"; port=10800 }) } } 
-        }
-    } else { 
-        $outbounds += @{ tag="proxy"; protocol="socks"; settings=@{ servers=@(@{ address="127.0.0.1"; port=10800 }) } } 
-    }
-    if ($global:enableAdBlock -or ($global:enableDirect -and -not [string]::IsNullOrWhiteSpace($global:lastBlockSplit))) {
+        } catch { $outbounds += @{ tag="proxy"; protocol="socks"; settings=@{ servers=@(@{ address="127.0.0.1"; port=10800 }) } } }
+    } else { $outbounds += @{ tag="proxy"; protocol="socks"; settings=@{ servers=@(@{ address="127.0.0.1"; port=10800 }) } } }
+    if ($App.Config.enableAdBlock -or ($App.Config.enableDirect -and -not [string]::IsNullOrWhiteSpace($App.Config.lastBlockSplit))) {
         $outbounds += @{ tag="block"; protocol="blackhole"; settings=@{} }
     }
     $outbounds += @{ tag="direct"; protocol="freedom"; settings=@{} }
-    $config = @{ 
-        log      = @{ logLevel="info"; access="access.log"; error="error.log" }
-        inbounds = $inboundArr
-        outbounds = $outbounds
-        routing  = @{ domainStrategy="AsIs"; rules=$rules } 
+    $cfg = @{ log=@{ logLevel="info"; access="access.log"; error="error.log" }; inbounds=$inbounds; outbounds=$outbounds; routing=@{ domainStrategy="AsIs"; rules=$rules } }
+    if ($App.Config.enableUpstreamDoh -and -not [string]::IsNullOrWhiteSpace($App.Config.upstreamDohUrl)) {
+        $cfg.Add("dns", @{ servers=@($App.Config.upstreamDohUrl) })
     }
-    if ($global:enableUpstreamDoh -and -not [string]::IsNullOrWhiteSpace($global:upstreamDohUrl)) {
-        $config.Add("dns", @{ servers = @($global:upstreamDohUrl) })
-    }
-    $config | ConvertTo-Json -Depth 10 | Set-Content (Get-AppPath "Data\Xray\config.json")
+    $cfg | ConvertTo-Json -Depth 10 | Set-Content (Get-AppPath "Data\Xray\config.json")
 }
 
 function Write-SingboxConfig {
     $bypassApps = @("tor.exe","haproxy.exe","lyrebird.exe","obfs4proxy.exe","snowflake-client.exe","xray.exe","sing-box.exe")
-    if ($global:enableDirect -and -not [string]::IsNullOrWhiteSpace($global:lastAppSplit)) {
-        $customApps = $global:lastAppSplit.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
-        foreach ($app in $customApps) {
-            $normalizedApp = if ($app -notmatch "\.exe$") { "$app.exe" } else { $app }
-            $bypassApps += $normalizedApp.ToLower()
+    if ($App.Config.enableDirect -and -not [string]::IsNullOrWhiteSpace($App.Config.lastAppSplit)) {
+        $App.Config.lastAppSplit.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ } | ForEach-Object {
+            $appStr = if ($_ -notmatch "\.exe$") { "$_.exe" } else { $_ }
+            $bypassApps += $appStr.ToLower()
         }
     }
     $sbRules = @(
@@ -1782,493 +1761,447 @@ function Write-SingboxConfig {
         @{ port=@(53); action="hijack-dns" }
         @{ protocol="dns"; action="hijack-dns" }
         @{ ip_is_private=$true; outbound="direct" }
-        @{ network="udp"; port=@(443); outbound="block" } 
+        @{ network="udp"; port=@(443); outbound="block" }
     )
-    if ($global:enableUpstreamDoh -and -not [string]::IsNullOrWhiteSpace($global:upstreamDohUrl)) {
-        if ($global:upstreamDohUrl.StartsWith("https://")) {
+    $dnsSrv = if ($App.Config.enableUpstreamDoh -and -not [string]::IsNullOrWhiteSpace($App.Config.upstreamDohUrl)) {
+        if ($App.Config.upstreamDohUrl.StartsWith("https://")) {
             try {
-                $sbUri  = [uri]$global:upstreamDohUrl
-                $sbHost = $sbUri.Host
-                $sbPath = if ($sbUri.AbsolutePath -eq "/") { "/dns-query" } else { $sbUri.PathAndQuery }
-                $dnsServer = @{ tag="dns_proxy"; type="https"; server=$sbHost; path=$sbPath; detour="proxy" }
-            } catch { $dnsServer = @{ tag="dns_proxy"; type="tcp"; server="1.1.1.1"; detour="proxy" } }
-        } else {
-            $dnsServer = @{ tag="dns_proxy"; type="tcp"; server=$global:upstreamDohUrl; detour="proxy" }
-        }
-    } else {
-        $dnsServer = @{ tag="dns_proxy"; type="https"; server="cloudflare-dns.com"; path="/dns-query"; detour="proxy" }
-    }
-    $sbConfig = @{
-        log      = @{ level="fatal" } 
-        dns      = @{ servers=@($dnsServer); final="dns_proxy"; strategy="ipv4_only" }
-        inbounds = @( @{ 
-            type="tun"; tag="tun-in"; interface_name="singbox_tun"
-            address=@("172.18.0.1/30"); mtu=9000; auto_route=$true; strict_route=$true; stack="gvisor" 
-        } )
-        outbounds = @( 
-            @{ type="socks"; tag="proxy"; server="127.0.0.1"; server_port=10818 }, 
-            @{ type="direct"; tag="direct" },
-            @{ type="block"; tag="block" } 
-        )
+                $u = [uri]$App.Config.upstreamDohUrl
+                $dPath = if ($u.AbsolutePath -eq "/") { "/dns-query" } else { $u.PathAndQuery }
+                @{ tag="dns_proxy"; type="https"; server=$u.Host; path=$dPath; detour="proxy" }
+            } catch { @{ tag="dns_proxy"; type="tcp"; server="1.1.1.1"; detour="proxy" } }
+        } else { @{ tag="dns_proxy"; type="tcp"; server=$App.Config.upstreamDohUrl; detour="proxy" } }
+    } else { @{ tag="dns_proxy"; type="https"; server="cloudflare-dns.com"; path="/dns-query"; detour="proxy" } }
+    
+    @{
+        log      = @{ level="fatal" }
+        dns      = @{ servers=@($dnsSrv); final="dns_proxy"; strategy="ipv4_only" }
+        inbounds = @( @{ type="tun"; tag="tun-in"; interface_name="singbox_tun"; address=@("172.18.0.1/30"); mtu=9000; auto_route=$true; strict_route=$true; stack="gvisor" } )
+        outbounds = @( @{ type="socks"; tag="proxy"; server="127.0.0.1"; server_port=10818 }, @{ type="direct"; tag="direct" }, @{ type="block"; tag="block" } )
         route    = @{ auto_detect_interface=$true; rules=$sbRules; final="proxy" }
-    }
-    $sbConfig | ConvertTo-Json -Depth 10 | Set-Content (Get-AppPath "Data\sing_box\config.json")
+    } | ConvertTo-Json -Depth 10 | Set-Content (Get-AppPath "Data\sing_box\config.json")
 }
 
 function Set-SystemProxy($enable) {
-    $path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
-    if ($enable) { 
-        Set-ItemProperty $path -Name "ProxyEnable" -Value 1
-        Set-ItemProperty $path -Name "ProxyServer"  -Value "127.0.0.1:10818"
-        $bypassList = "<local>"
-        if ($global:enableDirect -and -not [string]::IsNullOrWhiteSpace($global:lastManualSplit) -and $global:lastXrayMode -eq "Proxy Mode") {
-            $clean = $global:lastManualSplit.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
-            $bypassList = "$($clean -join ';');<local>"
+    $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+    if ($enable) {
+        Set-ItemProperty $regPath -Name "ProxyEnable" -Value 1
+        Set-ItemProperty $regPath -Name "ProxyServer"  -Value "127.0.0.1:10818"
+        $bypass = "<local>"
+        if ($App.Config.enableDirect -and -not [string]::IsNullOrWhiteSpace($App.Config.lastManualSplit) -and $App.Config.lastXrayMode -eq "Proxy Mode") {
+            $clean = $App.Config.lastManualSplit.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+            $bypass = "$($clean -join ';');<local>"
         }
-        Set-ItemProperty $path -Name "ProxyOverride" -Value $bypassList
-    } else { 
-        Set-ItemProperty $path -Name "ProxyEnable" -Value 0 
-    }
+        Set-ItemProperty $regPath -Name "ProxyOverride" -Value $bypass
+    } else { Set-ItemProperty $regPath -Name "ProxyEnable" -Value 0 }
     [Win32.WinInet]::InternetSetOption([IntPtr]::Zero, 39, [IntPtr]::Zero, 0) | Out-Null
     [Win32.WinInet]::InternetSetOption([IntPtr]::Zero, 37, [IntPtr]::Zero, 0) | Out-Null
 }
 
-function Restart-Xray($targetMode) {
-    Get-Process sing-box, xray -ErrorAction SilentlyContinue | ForEach-Object { 
-        try { 
-            if ($null -ne $_.Path -and ($_.Path -eq (Get-AppPath "Data\Xray\xray.exe") -or $_.Path -eq (Get-AppPath "Data\sing_box\sing-box.exe"))) { 
-                Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue 
-            } 
-        } catch {} 
-    }
-    if ($null -ne $global:cmdDebugPid)  { Stop-Process -Id $global:cmdDebugPid  -Force -ErrorAction SilentlyContinue; $global:cmdDebugPid  = $null }
-    if ($null -ne $global:cmdDebugPid2) { Stop-Process -Id $global:cmdDebugPid2 -Force -ErrorAction SilentlyContinue; $global:cmdDebugPid2 = $null }
-    if ($null -ne $global:xrayDohPid)   { Stop-Process -Id $global:xrayDohPid   -Force -ErrorAction SilentlyContinue; $global:xrayDohPid   = $null }
-    Start-Sleep -Milliseconds 500
-    Write-XrayConfig
-    if ($script:debugMode) { 
-        $p = Start-Process "cmd.exe" -ArgumentList "/c `"title XrayDebug & .\xray.exe run -c config.json || pause`"" -WorkingDirectory $xrayDir -WindowStyle Normal -PassThru
-        $global:cmdDebugPid = $p.Id 
-    } else { 
-        Start-Process -FilePath (Get-AppPath "Data\Xray\xray.exe") -ArgumentList "run -c config.json" -WorkingDirectory $xrayDir -WindowStyle Hidden 
-    }
-    if ($targetMode -eq "VPN Mode") {
-        Write-SingboxConfig
-        if ($script:debugMode) { 
-            $p2 = Start-Process "cmd.exe" -ArgumentList "/c `"title SingBoxDebug & .\sing-box.exe run -c config.json || pause`"" -WorkingDirectory $sbDir -WindowStyle Normal -PassThru
-            $global:cmdDebugPid2 = $p2.Id 
-        } else { 
-            Start-Process -FilePath (Get-AppPath "Data\sing_box\sing-box.exe") -ArgumentList "run -c config.json" -WorkingDirectory $sbDir -WindowStyle Hidden 
-        }
-    } elseif ($targetMode -eq "Proxy Mode") { 
-        Set-SystemProxy $true 
-    }
-    if ($targetMode -ne "Proxy Mode") { Set-SystemProxy $false }
-    if ($global:isConnected) {
-        if ($null -ne $global:pingTimer) { $global:pingTimer.Stop() } 
-        $global:pingTimer = New-Object System.Windows.Threading.DispatcherTimer
-        $global:pingTimer.Interval = [TimeSpan]::FromSeconds(1.5)
-        $global:pingTimer.add_Tick({ $global:pingTimer.Stop(); Start-GeoPing })
-        $global:pingTimer.Start()
-    }
-}
-
-function Format-HAProxyConfig($activeCount) {
-    $haPathCfg = Get-AppPath "Data\HAproxy\haproxy.cfg"
-    if (Test-Path $haPathCfg) {
-        $haData = Get-Content $haPathCfg
-        $newHaData = @()
-        $hasStats = $false
-        foreach ($line in $haData) {
-            if ($line -match "^listen stats") { $hasStats = $true }
-            if ($line -match "^\s*#?\s*server\s+tor(\d+)") {
-                if ([int]$matches[1] -le $activeCount) { 
-                    $newHaData += ($line -replace "^\s*#+\s*", "    ")
-                } else { 
-                    if ($line -notmatch "^\s*#") { $newHaData += "    # $($line.TrimStart())" } 
-                    else { $newHaData += $line } 
-                }
-            } else { $newHaData += $line }
-        }
-        if (-not $hasStats) { 
-            $newHaData += ""
-            $newHaData += "listen stats"
-            $newHaData += "    bind 127.0.0.1:10888"
-            $newHaData += "    mode http"
-            $newHaData += "    stats enable"
-            $newHaData += "    stats uri /stats" 
-        }
-        $newHaData | Set-Content $haPathCfg
-    }
-}
-
-# WAVE ENGINE
-function Update-WaveAnimation {
-    param([string]$State)
-    if ($null -eq $wavePath1 -or $null -eq $waveTrans1 -or $null -eq $waveTrans2) { return }
-    if ($null -eq $global:wavePhysicsTimer) {
-        $global:waveX1 = 0.0; $global:waveX2 = -75.0
-        $global:waveCurrentSpeed1 = 0.4; $global:waveCurrentSpeed2 = 0.5
-        $global:waveTargetSpeed1  = 0.4; $global:waveTargetSpeed2  = 0.5
-        $global:wavePhysicsTimer = New-Object System.Windows.Threading.DispatcherTimer
-        $global:wavePhysicsTimer.Interval = [TimeSpan]::FromMilliseconds(25)
-        $global:wavePhysicsTimer.add_Tick({
-            $global:waveCurrentSpeed1 += ($global:waveTargetSpeed1 - $global:waveCurrentSpeed1) * 0.08
-            $global:waveCurrentSpeed2 += ($global:waveTargetSpeed2 - $global:waveCurrentSpeed2) * 0.08
-            $global:waveX1 -= $global:waveCurrentSpeed1
-            $global:waveX2 -= $global:waveCurrentSpeed2
-            if ($global:waveX1 -le -150.0) { $global:waveX1 += 150.0 }
-            if ($global:waveX2 -le -225.0) { $global:waveX2 += 150.0 }
-            $waveTrans1.X = $global:waveX1; $waveTrans2.X = $global:waveX2
-        })
-        $global:wavePhysicsTimer.Start()
-    }
-    if ($null -ne $global:waveHoldTimer) { $global:waveHoldTimer.Stop() }
-    $colorHex = "#718096"
-    switch ($State) {
-        "Idle" {
-            $colorHex = "#718096"
-            $global:waveTargetSpeed1 = 0.4; $global:waveTargetSpeed2 = 0.5
-        }
-        "Connecting" {
-            $colorHex = "#B78854"
-            $global:waveCurrentSpeed1 = 5.5; $global:waveCurrentSpeed2 = 6.0
-            $global:waveTargetSpeed1  = 5.5; $global:waveTargetSpeed2  = 6.0
-            $global:waveHoldTimer = New-Object System.Windows.Threading.DispatcherTimer
-            $global:waveHoldTimer.Interval = [TimeSpan]::FromMilliseconds(600)
-            $global:waveHoldTimer.add_Tick({
-                $global:waveHoldTimer.Stop()
-                $global:waveTargetSpeed1 = 1.1; $global:waveTargetSpeed2 = 1.3
-            }.GetNewClosure())
-            $global:waveHoldTimer.Start()
-        }
-        "Connected" {
-            $colorHex = "#68D391"
-            $global:waveCurrentSpeed1 = 5.5; $global:waveCurrentSpeed2 = 6.0
-            $global:waveTargetSpeed1  = 5.5; $global:waveTargetSpeed2  = 6.0
-            $global:waveHoldTimer = New-Object System.Windows.Threading.DispatcherTimer
-            $global:waveHoldTimer.Interval = [TimeSpan]::FromMilliseconds(600)
-            $global:waveHoldTimer.add_Tick({
-                $global:waveHoldTimer.Stop()
-                $global:waveTargetSpeed1 = 0.4; $global:waveTargetSpeed2 = 0.5
-            }.GetNewClosure())
-            $global:waveHoldTimer.Start()
-        }
-    }
+function Disable-SystemProxy {
     try {
-        $targetColor = [System.Windows.Media.ColorConverter]::ConvertFromString($colorHex)
-        $colorAnim = New-Object System.Windows.Media.Animation.ColorAnimation
-        $colorAnim.To = $targetColor
-        $colorAnim.Duration = New-Object System.Windows.Duration([TimeSpan]::FromSeconds(0.8))
-        $brush1 = New-Object System.Windows.Media.SolidColorBrush -ArgumentList ([System.Windows.Media.Colors]::Gray)
-        $brush2 = New-Object System.Windows.Media.SolidColorBrush -ArgumentList ([System.Windows.Media.Colors]::Gray)
-        $brush1.Opacity = 0.25; $brush2.Opacity = 0.15
-        $wavePath1.Fill = $brush1; $wavePath2.Fill = $brush2
-        $brush1.BeginAnimation([System.Windows.Media.SolidColorBrush]::ColorProperty, $colorAnim)
-        $brush2.BeginAnimation([System.Windows.Media.SolidColorBrush]::ColorProperty, $colorAnim)
+        Set-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -Name "ProxyEnable" -Value 0 -ErrorAction SilentlyContinue
+        [Win32.WinInet]::InternetSetOption([IntPtr]::Zero, 39, [IntPtr]::Zero, 0) | Out-Null
+        [Win32.WinInet]::InternetSetOption([IntPtr]::Zero, 37, [IntPtr]::Zero, 0) | Out-Null
     } catch {}
 }
 
-# GEO-IP TRACKER
+function Format-HAProxyConfig($activeCount) {
+    $cfgPath = Get-AppPath "Data\HAproxy\haproxy.cfg"
+    if (-not (Test-Path $cfgPath)) { return }
+    $haData = Get-Content $cfgPath; $newData = @(); $hasStats = $false
+    foreach ($line in $haData) {
+        if ($line -match "^listen stats") { $hasStats = $true }
+        if ($line -match "^\s*#?\s*server\s+tor(\d+)") {
+            if ([int]$matches[1] -le $activeCount) { $newData += ($line -replace "^\s*#+\s*", "    ") }
+            else { $newData += if ($line -notmatch "^\s*#") { "    # $($line.TrimStart())" } else { $line } }
+        } else { $newData += $line }
+    }
+    if (-not $hasStats) { $newData += "","listen stats","    bind 127.0.0.1:10888","    mode http","    stats enable","    stats uri /stats" }
+    $newData | Set-Content $cfgPath
+}
+
+function Restart-Xray($targetMode) {
+    Get-Process sing-box, xray -ErrorAction SilentlyContinue | ForEach-Object {
+        try {
+            if ($null -ne $_.Path -and ($_.Path -eq (Get-AppPath "Data\Xray\xray.exe") -or $_.Path -eq (Get-AppPath "Data\sing_box\sing-box.exe"))) {
+                Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+            }
+        } catch {}
+    }
+    if ($null -ne $App.Runtime.cmdDebugPid)  { Stop-Process -Id $App.Runtime.cmdDebugPid  -Force -ErrorAction SilentlyContinue; $App.Runtime.cmdDebugPid  = $null }
+    if ($null -ne $App.Runtime.cmdDebugPid2) { Stop-Process -Id $App.Runtime.cmdDebugPid2 -Force -ErrorAction SilentlyContinue; $App.Runtime.cmdDebugPid2 = $null }
+    if ($null -ne $App.Runtime.xrayDohPid)   { Stop-Process -Id $App.Runtime.xrayDohPid   -Force -ErrorAction SilentlyContinue; $App.Runtime.xrayDohPid   = $null }
+    
+    Start-Sleep -Milliseconds 500
+    Write-XrayConfig
+    
+    if ($App.Config.debugMode) {
+        $p = Start-Process "cmd.exe" -ArgumentList "/c `"title XrayDebug & .\xray.exe run -c config.json || pause`"" -WorkingDirectory $App.Config.xrayDir -WindowStyle Normal -PassThru
+        $App.Runtime.cmdDebugPid = $p.Id
+    } else {
+        Start-Process -FilePath (Get-AppPath "Data\Xray\xray.exe") -ArgumentList "run -c config.json" -WorkingDirectory $App.Config.xrayDir -WindowStyle Hidden
+    }
+    if ($targetMode -eq "VPN Mode") {
+        Write-SingboxConfig
+        if ($App.Config.debugMode) {
+            $p2 = Start-Process "cmd.exe" -ArgumentList "/c `"title SingBoxDebug & .\sing-box.exe run -c config.json || pause`"" -WorkingDirectory $App.Config.sbDir -WindowStyle Normal -PassThru
+            $App.Runtime.cmdDebugPid2 = $p2.Id
+        } else { Start-Process -FilePath (Get-AppPath "Data\sing_box\sing-box.exe") -ArgumentList "run -c config.json" -WorkingDirectory $App.Config.sbDir -WindowStyle Hidden }
+    } elseif ($targetMode -eq "Proxy Mode") { Set-SystemProxy $true }
+    
+    if ($targetMode -ne "Proxy Mode") { Set-SystemProxy $false }
+    
+    if ($App.State.isConnected) {
+        if ($null -ne $App.Runtime.pingTimer) { $App.Runtime.pingTimer.Stop() }
+        $App.Runtime.pingTimer = New-Object System.Windows.Threading.DispatcherTimer
+        $App.Runtime.pingTimer.Interval = [TimeSpan]::FromSeconds(1.5)
+        $App.Runtime.pingTimer.add_Tick({ $App.Runtime.pingTimer.Stop(); Start-GeoPing })
+        $App.Runtime.pingTimer.Start()
+    }
+}
+
+#  WAVE ANIMATION
+function Update-WaveAnimation {
+    param([string]$State)
+    if ($null -eq $App.UI.wavePath1 -or $null -eq $App.UI.waveTrans1 -or $null -eq $App.UI.waveTrans2) { return }
+    if ($null -eq $App.Runtime.wavePhysicsTimer) {
+        $App.Runtime.wavePhysicsTimer = New-Object System.Windows.Threading.DispatcherTimer
+        $App.Runtime.wavePhysicsTimer.Interval = [TimeSpan]::FromMilliseconds(25)
+        $App.Runtime.wavePhysicsTimer.add_Tick({
+            $App.Runtime.waveCurrentSpeed1 += ($App.Runtime.waveTargetSpeed1 - $App.Runtime.waveCurrentSpeed1) * 0.08
+            $App.Runtime.waveCurrentSpeed2 += ($App.Runtime.waveTargetSpeed2 - $App.Runtime.waveCurrentSpeed2) * 0.08
+            $App.Runtime.waveX1 -= $App.Runtime.waveCurrentSpeed1
+            $App.Runtime.waveX2 -= $App.Runtime.waveCurrentSpeed2
+            if ($App.Runtime.waveX1 -le -150.0) { $App.Runtime.waveX1 += 150.0 }
+            if ($App.Runtime.waveX2 -le -225.0) { $App.Runtime.waveX2 += 150.0 }
+            $App.UI.waveTrans1.X = $App.Runtime.waveX1
+            $App.UI.waveTrans2.X = $App.Runtime.waveX2
+        })
+        $App.Runtime.wavePhysicsTimer.Start()
+    }
+    if ($null -ne $App.Runtime.waveHoldTimer) { $App.Runtime.waveHoldTimer.Stop() }
+    
+    $colorHex = "#718096"
+    switch ($State) {
+        "Idle"       { $App.Runtime.waveTargetSpeed1 = 0.4; $App.Runtime.waveTargetSpeed2 = 0.5 }
+        "Connecting" {
+            $colorHex = "#B78854"
+            $App.Runtime.waveCurrentSpeed1 = 5.5; $App.Runtime.waveCurrentSpeed2 = 6.0
+            $App.Runtime.waveTargetSpeed1  = 5.5; $App.Runtime.waveTargetSpeed2  = 6.0
+            $App.Runtime.waveHoldTimer = New-Object System.Windows.Threading.DispatcherTimer
+            $App.Runtime.waveHoldTimer.Interval = [TimeSpan]::FromMilliseconds(600)
+            $App.Runtime.waveHoldTimer.add_Tick({ $App.Runtime.waveHoldTimer.Stop(); $App.Runtime.waveTargetSpeed1 = 1.1; $App.Runtime.waveTargetSpeed2 = 1.3 }.GetNewClosure())
+            $App.Runtime.waveHoldTimer.Start()
+        }
+        "Connected"  {
+            $colorHex = "#68D391"
+            $App.Runtime.waveCurrentSpeed1 = 5.5; $App.Runtime.waveCurrentSpeed2 = 6.0
+            $App.Runtime.waveTargetSpeed1  = 5.5; $App.Runtime.waveTargetSpeed2  = 6.0
+            $App.Runtime.waveHoldTimer = New-Object System.Windows.Threading.DispatcherTimer
+            $App.Runtime.waveHoldTimer.Interval = [TimeSpan]::FromMilliseconds(600)
+            $App.Runtime.waveHoldTimer.add_Tick({ $App.Runtime.waveHoldTimer.Stop(); $App.Runtime.waveTargetSpeed1 = 0.4; $App.Runtime.waveTargetSpeed2 = 0.5 }.GetNewClosure())
+            $App.Runtime.waveHoldTimer.Start()
+        }
+    }
+    
+    try {
+        $col  = [System.Windows.Media.ColorConverter]::ConvertFromString($colorHex)
+        $anim = New-Object System.Windows.Media.Animation.ColorAnimation($col, (New-Object System.Windows.Duration([TimeSpan]::FromSeconds(0.8))))
+        $App.UI.waveBrush1.BeginAnimation([System.Windows.Media.SolidColorBrush]::ColorProperty, $anim)
+        $App.UI.waveBrush2.BeginAnimation([System.Windows.Media.SolidColorBrush]::ColorProperty, $anim)
+    } catch {}
+}
+
+#  GEO-IP
 function Start-GeoPing {
-    if ($global:isGeoTracing) { return } 
-    $global:isGeoTracing = $true
-    $lblGeoData.Text = "Loc: TRACING...`nPing: --"; $lblGeoData.Foreground = "#68D391" 
-    $geoClient = New-Object System.Net.WebClient
-    $geoClient.Proxy = New-Object System.Net.WebProxy("http://127.0.0.1:10818")
-    $global:geoSw = [System.Diagnostics.Stopwatch]::StartNew()
-    $geoClient.Add_DownloadStringCompleted({
+    if ($App.State.isGeoTracing) { return }
+    $App.State.isGeoTracing = $true
+    $App.UI.lblGeoData.Text       = "Loc: TRACING...`nPing: --"
+    $App.UI.lblGeoData.Foreground = $App.UI.brGreen
+    $gc = New-Object System.Net.WebClient
+    $gc.Proxy = New-Object System.Net.WebProxy("http://127.0.0.1:10818")
+    $App.Runtime.geoSw = [System.Diagnostics.Stopwatch]::StartNew()
+    $gc.Add_DownloadStringCompleted({
         param($sender, $e)
-        $global:isGeoTracing = $false  
-        $global:geoSw.Stop()
-        $pingMs = $global:geoSw.ElapsedMilliseconds
-        $form.Dispatcher.Invoke([System.Action]{
-            if ($global:isConnected) {
+        $App.State.isGeoTracing = $false
+        $App.Runtime.geoSw.Stop()
+        $pingMs = $App.Runtime.geoSw.ElapsedMilliseconds
+        $App.UI.form.Dispatcher.Invoke([System.Action]{
+            if ($App.State.isConnected) {
                 if (-not $e.Cancelled -and $null -eq $e.Error) {
                     try {
-                        $data   = $e.Result | ConvertFrom-Json
-                        $geoStr = ""
-                        $selConfig = if ($comboConfig.SelectedItem.Tag -match "Custom") { "Custom" } else { "Optimized" }
-                        if ($selConfig -eq "Custom" -or $global:enableV2rayChain) { 
-                            $geoStr = $data.country 
-                        } else {
-                            $cMap = @{ "NA"="NORTH AMERICA";"EU"="EUROPE";"AS"="ASIA";"SA"="SOUTH AMERICA";"AF"="AFRICA";"OC"="OCEANIA";"AN"="ANTARCTICA" }
-                            $geoStr = $cMap[$data.continent_code]
-                            if (-not $geoStr) { $geoStr = $data.continent_code }
+                        $data = $e.Result | ConvertFrom-Json
+                        $selCfg = if ($App.UI.comboConfig.SelectedItem.Tag -match "Custom") { "Custom" } else { "Optimized" }
+                        $geoStr = if ($selCfg -eq "Custom" -or $App.Config.enableV2rayChain) { $data.country } else {
+                            $cMap = @{ NA="NORTH AMERICA"; EU="EUROPE"; AS="ASIA"; SA="SOUTH AMERICA"; AF="AFRICA"; OC="OCEANIA"; AN="ANTARCTICA" }
+                            if ($cMap[$data.continent_code]) { $cMap[$data.continent_code] } else { $data.continent_code }
                         }
-                        $lblGeoData.Text = "Loc: $($geoStr.ToUpper())`nPing: $($pingMs)ms"
-                        $lblGeoData.Foreground = "#68D391" 
-                    } catch { 
-                        $lblGeoData.Text = "Loc: ERROR`nPing: --"; $lblGeoData.Foreground = "#8B4A4A" 
-                    }
-                } else { 
-                    $lblGeoData.Text = "Loc: TIMEOUT`nPing: --"; $lblGeoData.Foreground = "#8B4A4A" 
-                }
+                        $App.UI.lblGeoData.Text       = "Loc: $($geoStr.ToUpper())`nPing: $($pingMs)ms"
+                        $App.UI.lblGeoData.Foreground = $App.UI.brGreen
+                    } catch { $App.UI.lblGeoData.Text = "Loc: ERROR`nPing: --"; $App.UI.lblGeoData.Foreground = $_bc.ConvertFromString("#8B4A4A") }
+                } else { $App.UI.lblGeoData.Text = "Loc: TIMEOUT`nPing: --"; $App.UI.lblGeoData.Foreground = $_bc.ConvertFromString("#8B4A4A") }
             }
         })
         $sender.Dispose()
     })
-    try { $geoClient.DownloadStringAsync([uri]"https://get.geojs.io/v1/ip/geo.json") } 
-    catch { 
-        $global:isGeoTracing = $false
-        $lblGeoData.Text = "Loc: ERROR`nPing: --"; $lblGeoData.Foreground = "#8B4A4A"
-        $geoClient.Dispose()
-    }
+    try { $gc.DownloadStringAsync([uri]"https://get.geojs.io/v1/ip/geo.json") }
+    catch { $App.State.isGeoTracing = $false; $gc.Dispose() }
 }
 
-function Reset-ButtonText { 
-    $btnActionMainText.Text = "CONNECT"; $btnActionSubText.Text = ""
-    $btnActionMainText.Foreground = "#E2E8F0"
+#  ENGINE CONTROL
+function Reset-ButtonText {
+    $App.UI.btnActionMainText.Text       = "CONNECT"
+    $App.UI.btnActionSubText.Text        = ""
+    $App.UI.btnActionMainText.Foreground = $App.UI.brWhite
     Update-WaveAnimation -State "Idle"
 }
 
 function Stop-AllEngines($isClosing = $false) {
-    $global:abortBoot = $true
+    $App.State.abortBoot       = $true
+    $App.State.isEngineRunning = $false
     Set-SystemProxy $false
-    $global:isEngineRunning = $false
-    Get-Process tor, haproxy, xray, sing-box -ErrorAction SilentlyContinue | ForEach-Object { 
-        try { 
+    Get-Process tor, haproxy, xray, sing-box -ErrorAction SilentlyContinue | ForEach-Object {
+        try {
             $p = $_.Path
             if ($null -ne $p -and (
-                $p -eq (Get-AppPath "Data\Xray\xray.exe") -or 
-                $p -eq (Get-AppPath "Data\HAproxy\haproxy.exe") -or 
-                $p -eq (Get-AppPath "Data\sing_box\sing-box.exe") -or 
-                $p -match "Data\\Tors\\Tor")) { 
+                $p -eq (Get-AppPath "Data\Xray\xray.exe")         -or
+                $p -eq (Get-AppPath "Data\HAproxy\haproxy.exe")    -or
+                $p -eq (Get-AppPath "Data\sing_box\sing-box.exe")  -or
+                $p -match "Data\\Tors\\Tor")) {
                 Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
                 $proc = Get-Process -Id $_.Id -ErrorAction SilentlyContinue
-                if ($null -ne $proc) {
-                    $null = $proc.WaitForExit(500) 
-                }
-            } 
-        } catch {
-            Write-Host "Error stopping process: $($_.Exception.Message)"
-        }
+                if ($null -ne $proc) { $null = $proc.WaitForExit(500) }
+            }
+        } catch { Write-Host "Stop error: $($_.Exception.Message)" }
     }
-    if ($null -ne $global:cmdDebugPid)  { Stop-Process -Id $global:cmdDebugPid  -Force -ErrorAction SilentlyContinue; $global:cmdDebugPid  = $null }
-    if ($null -ne $global:cmdDebugPid2) { Stop-Process -Id $global:cmdDebugPid2 -Force -ErrorAction SilentlyContinue; $global:cmdDebugPid2 = $null }
-    if ($null -ne $global:xrayDohPid)   { Stop-Process -Id $global:xrayDohPid   -Force -ErrorAction SilentlyContinue; $global:xrayDohPid   = $null }
-    $global:isConnected       = $false
-    $global:lastTotalBytes    = 0
-    $global:sessionDataBytes  = 0
-    $global:sessionStartTime  = $null
+    if ($null -ne $App.Runtime.cmdDebugPid)  { Stop-Process -Id $App.Runtime.cmdDebugPid  -Force -ErrorAction SilentlyContinue; $App.Runtime.cmdDebugPid  = $null }
+    if ($null -ne $App.Runtime.cmdDebugPid2) { Stop-Process -Id $App.Runtime.cmdDebugPid2 -Force -ErrorAction SilentlyContinue; $App.Runtime.cmdDebugPid2 = $null }
+    if ($null -ne $App.Runtime.xrayDohPid)   { Stop-Process -Id $App.Runtime.xrayDohPid   -Force -ErrorAction SilentlyContinue; $App.Runtime.xrayDohPid   = $null }
+    
+    $App.State.isConnected      = $false
+    $App.State.lastTotalBytes   = 0
+    $App.State.sessionDataBytes = 0
+    $App.State.sessionStartTime = $null
     
     if (-not $isClosing) {
-        if ($null -ne $lblSessionTime) { $lblSessionTime.Text = "SESSION: OFFLINE"; $lblSessionTime.Foreground = $global:brushGray }
+        if ($null -ne $App.UI.lblSessionTime) { $App.UI.lblSessionTime.Text = "SESSION: OFFLINE"; $App.UI.lblSessionTime.Foreground = $App.UI.brGray }
         Reset-ButtonText
-        $btnAction.IsEnabled = $true
-        $lblSocksTitle.Text = "MIXED PORT"
-        $lblSocksDataIPs.Text = "Waiting for connection..."
-        $lblSocksDataTags.Text = ""
-        $lblStatsData.Text = "Speed: 0 KB/s`nTotal: 0 MB"
-        $lblGeoData.Text = "Loc: --`nPing: --"; $lblGeoData.Foreground = "#68D391"
+        $App.UI.btnAction.IsEnabled    = $true
+        $App.UI.lblSocksTitle.Text     = "MIXED PORT"
+        $App.UI.lblSocksDataIPs.Text   = "Waiting for connection..."
+        $App.UI.lblSocksDataTags.Text  = ""
+        $App.UI.lblStatsData.Text      = "Speed: 0 KB/s`nTotal: 0 MB"
+        $App.UI.lblGeoData.Text        = "Loc: --`nPing: --"
+        $App.UI.lblGeoData.Foreground  = $App.UI.brGreen
     }
 }
 
 function Start-Engines {
     try {
-        if (Get-Process tor -ErrorAction SilentlyContinue) { 
-            $btnActionSubText.Text = "Clearing old engines..."
-            DoEvents; Stop-AllEngines; Start-Sleep -Seconds 1 
+        if (Get-Process tor -ErrorAction SilentlyContinue) {
+            $App.UI.btnActionSubText.Text = "Clearing old engines..."
+            DoEvents; Stop-AllEngines; Start-Sleep -Seconds 1
         }
-        $global:abortBoot = $false
-        $selBridge = $comboBridge.SelectedItem.Tag
-        $selConfig = if ($comboConfig.SelectedItem.Tag -match "Custom") { "Custom" } else { "Optimized" }
-        $selCount  = [int]($comboCount.SelectedItem.Tag)
-        $mode      = $global:lastXrayMode
-        $cfgFileTarget = "torrc"
+        $App.State.abortBoot = $false
+        $selBridge  = $App.UI.comboBridge.SelectedItem.Tag
+        $selConfig  = if ($App.UI.comboConfig.SelectedItem.Tag -match "Custom") { "Custom" } else { "Optimized" }
+        $selCount   = [int]($App.UI.comboCount.SelectedItem.Tag)
+        $mode       = $App.Config.lastXrayMode
+        $torrcFile  = "torrc"
+        
         for ($i = 1; $i -le 8; $i++) {
             Remove-Item (Get-AppPath "Data\Tors\Tor$i\tor.log") -ErrorAction SilentlyContinue
-            $lbl = $form.FindName("lblTor$i")
-            $padded = $i.ToString().PadLeft(2, '0')
-            if ($null -ne $lbl -and $i -le $selCount) { $lbl.Text = "Tor $padded`: Waiting..."; $lbl.Foreground = "#A0AEC0" } 
-            elseif ($null -ne $lbl)                   { $lbl.Text = "Tor $padded`: Disabled";  $lbl.Foreground = "#4A5568" }
+            $lbl    = $App.UI.form.FindName("lblTor$i")
+            $padded = $i.ToString().PadLeft(2,'0')
+            if ($null -ne $lbl) {
+                if ($i -le $selCount) { $lbl.Text = "Tor $padded`: Waiting..."; $lbl.Foreground = $App.UI.brGray }
+                else                  { $lbl.Text = "Tor $padded`: Disabled";   $lbl.Foreground = $_bc.ConvertFromString("#4A5568") }
+            }
         }
         Remove-Item (Get-AppPath "Data\Xray\access.log")     -ErrorAction SilentlyContinue
         Remove-Item (Get-AppPath "Data\Xray\access.log.tmp") -ErrorAction SilentlyContinue
-        if ($null -ne $txtXrayLogs) { $txtXrayLogs.Text = "" }
-        $global:isEngineRunning = $true
+        if ($null -ne $App.UI.txtXrayLogs) { $App.UI.txtXrayLogs.Text = "" }
+        
+        $App.State.isEngineRunning          = $true
         Save-Config
-        $winStyle    = if ($script:debugMode) { "Normal" } else { "Hidden" }
-        $btnActionMainText.Text     = "CONNECTING"
-        $btnActionMainText.Foreground = "#F6AD55"
-        $btnActionSubText.Foreground  = "#B78854"
+        $winStyle                           = if ($App.Config.debugMode) { "Normal" } else { "Hidden" }
+        $App.UI.btnActionMainText.Text      = "CONNECTING"
+        $App.UI.btnActionMainText.Foreground = $_bc.ConvertFromString("#F6AD55")
+        $App.UI.btnActionSubText.Foreground  = $_bc.ConvertFromString("#B78854")
+        
         Update-WaveAnimation -State "Connecting"
         Format-HAProxyConfig $selCount
+        
         $dynamicWait = 16 - $selCount
-        if ($global:enableTorDoh -and -not $global:enableOutboundProxy) {
+        if ($App.Config.enableTorDoh -and -not $App.Config.enableOutboundProxy) {
             Write-TorOutboundDohConfig
-            $pDoH = Start-Process -FilePath (Get-AppPath "Data\Xray\xray.exe") -ArgumentList "run -c tor-doh.json" -WorkingDirectory $xrayDir -WindowStyle Hidden -PassThru
-            $global:xrayDohPid = $pDoH.Id
+            $pDoH = Start-Process -FilePath (Get-AppPath "Data\Xray\xray.exe") -ArgumentList "run -c tor-doh.json" -WorkingDirectory $App.Config.xrayDir -WindowStyle Hidden -PassThru
+            $App.Runtime.xrayDohPid = $pDoH.Id
         }
+        
         for ($i = 1; $i -le $selCount; $i++) {
-            if ($global:abortBoot) { break } 
-            $padded = $i.ToString().PadLeft(2, '0')
-            $btnActionSubText.Text = "Booting Tor $i of $selCount"
-            if ($i % 2 -eq 0) { DoEvents } 
+            if ($App.State.abortBoot) { break }
+            $padded = $i.ToString().PadLeft(2,'0')
+            $App.UI.btnActionSubText.Text = "Booting Tor $i of $selCount"
+            if ($i % 2 -eq 0) { DoEvents }
+            
             $path = Get-AppPath "Data\Tors\Tor$i"
-            if (Test-Path "$path\$cfgFileTarget") {
-                $c = @(Get-Content "$path\$cfgFileTarget")
-                $cleanConfig = @()
-                foreach ($line in $c) {
-                    if ($line -match "^# --- MANAGED BRIDGES ---") { break }
-                    if ($line -notmatch "^UseBridges" -and $line -notmatch "^ClientTransportPlugin" -and $line -notmatch "^Bridge" -and 
-                        $line -notmatch "^HTTPSProxy" -and $line -notmatch "^Socks5Proxy" -and $line -notmatch "^Socks5ProxyUsername" -and 
-                        $line -notmatch "^Socks5ProxyPassword" -and $line -notmatch "^HTTPSProxyAuthenticator" -and $line -notmatch "^Log notice file" -and 
-                        $line -notmatch "^MaxCircuitDirtiness" -and $line -notmatch "^ExitNodes" -and $line -notmatch "^StrictNodes" -and 
-                        $line -notmatch "^CircuitBuildTimeout" -and $line -notmatch "^HardwareAccel" -and 
-                        $line -notmatch "^KeepalivePeriod" -and $line -notmatch "^NewCircuitPeriod" -and 
-                        $line -notmatch "^# --- DYNAMIC ROUTING ---") {
-                        if ($line.Trim() -ne "") { $cleanConfig += $line.Trim() }
-                    }
+            if (-not (Test-Path "$path\$torrcFile")) { continue }
+            $c = @(Get-Content "$path\$torrcFile")
+            $cleanCfg = @()
+            foreach ($line in $c) {
+                if ($line -match "^# --- MANAGED BRIDGES ---") { break }
+                if ($line -notmatch "^UseBridges|^ClientTransportPlugin|^Bridge|^HTTPSProxy|^Socks5Proxy|^Socks5ProxyUsername|^Socks5ProxyPassword|^HTTPSProxyAuthenticator|^Log notice file|^MaxCircuitDirtiness|^ExitNodes|^StrictNodes|^CircuitBuildTimeout|^HardwareAccel|^KeepalivePeriod|^NewCircuitPeriod|^# --- DYNAMIC ROUTING ---") {
+                    if ($line.Trim()) { $cleanCfg += $line.Trim() }
                 }
-                $cleanConfig += ""
-                $cleanConfig += "# --- DYNAMIC ROUTING ---"
-                switch ($selConfig) {
-                    "Optimized" { 
-                        $cleanConfig += "CircuitBuildTimeout 10"
-                        $cleanConfig += "KeepalivePeriod 60"
-                        $cleanConfig += "NewCircuitPeriod 120"
-                        $cleanConfig += "HardwareAccel 1"
-                        $cleanConfig += "ExitNodes {nl},{de},{it},{is},{fi},{au},{nz},{ch},{hk},{ae},{us}"
-                        $cleanConfig += "StrictNodes 0" 
-                    }
-                    "Custom" { 
-                        if (-not [string]::IsNullOrWhiteSpace($global:customExitCountry)) {
-                            $cleanConfig += "ExitNodes {$($global:customExitCountry)}"; $cleanConfig += "StrictNodes 1"
-                        }
-                    }
-                    default { 
-                        $cleanConfig += "ExitNodes {nl},{de},{it},{is},{fi},{au},{nz},{ch},{hk},{ae},{us}"
-                        $cleanConfig += "StrictNodes 0" 
-                    }
-                }
-                $cleanConfig += ""; $cleanConfig += "# --- MANAGED BRIDGES ---"; $cleanConfig += "Log notice file tor.log"
-                if ($global:enableOutboundProxy -and -not [string]::IsNullOrWhiteSpace($global:outboundProxyAddress) -and -not [string]::IsNullOrWhiteSpace($global:outboundProxyPort)) {
-                    if ($global:outboundProxyType -eq "SOCKS5") {
-                        $cleanConfig += "Socks5Proxy $($global:outboundProxyAddress):$($global:outboundProxyPort)"
-                        if ($global:enableOutboundAuth -and -not [string]::IsNullOrWhiteSpace($global:outboundProxyUser) -and -not [string]::IsNullOrWhiteSpace($global:outboundProxyPass)) { 
-                            $cleanConfig += "Socks5ProxyUsername $($global:outboundProxyUser)"
-                            $cleanConfig += "Socks5ProxyPassword $($global:outboundProxyPass)" 
-                        }
-                    } elseif ($global:outboundProxyType -eq "HTTPS") {
-                        $cleanConfig += "HTTPSProxy $($global:outboundProxyAddress):$global:outboundProxyPort"
-                        if ($global:enableOutboundAuth -and -not [string]::IsNullOrWhiteSpace($global:outboundProxyUser) -and -not [string]::IsNullOrWhiteSpace($global:outboundProxyPass)) { 
-                            $cleanConfig += "HTTPSProxyAuthenticator $($global:outboundProxyUser):$($global:outboundProxyPass)" 
-                        }
-                    }
-                } elseif ($global:enableTorDoh) {
-                    $cleanConfig += "Socks5Proxy 127.0.0.1:10820"
-                }
-                if ($selBridge -eq "Custom" -and $global:customBridgeLine -ne "") { 
-                    $cleanConfig += "UseBridges 1"
-                    $cleanConfig += "ClientTransportPlugin meek_lite,obfs2,obfs3,obfs4,scramblesuit,webtunnel,snowflake exec ..\..\PluggableTransports\lyrebird.exe"
-                    $customLines = $global:customBridgeLine.Split("`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" -and $_ -notmatch "^ClientTransportPlugin" }
-                    foreach ($cl in $customLines) { 
-                        if ($cl -notmatch "^Bridge\s") { $cleanConfig += "Bridge $cl" } else { $cleanConfig += $cl } 
-                    }
-                } elseif ($selBridge -ne "Direct (None)") { 
-                    $b = $bridgeData[$selBridge]
-                    $cleanConfig += "UseBridges 1"; $cleanConfig += $b.plugin
-                    foreach ($line in $b.lines) { $cleanConfig += $line }
-                } else { 
-                    $cleanConfig += "UseBridges 0" 
-                }
-                $cleanConfig | Set-Content "$path\$cfgFileTarget"
-                Start-Process -FilePath "$path\tor.exe" -ArgumentList "-f $cfgFileTarget" -WorkingDirectory $path -WindowStyle $winStyle
-                Wait-NonBlocking $dynamicWait
             }
+            $cleanCfg += "","# --- DYNAMIC ROUTING ---"
+            switch ($selConfig) {
+                "Optimized" {
+                    $cleanCfg += "CircuitBuildTimeout 10","KeepalivePeriod 60","NewCircuitPeriod 120","HardwareAccel 1"
+                    $cleanCfg += "ExitNodes {nl},{de},{it},{is},{fi},{au},{nz},{ch},{hk},{ae},{us}","StrictNodes 0"
+                }
+                "Custom" {
+                    if (-not [string]::IsNullOrWhiteSpace($App.Config.customExitCountry)) {
+                        $cleanCfg += "ExitNodes {$($App.Config.customExitCountry)}","StrictNodes 1"
+                    }
+                }
+                default {
+                    $cleanCfg += "ExitNodes {nl},{de},{it},{is},{fi},{au},{nz},{ch},{hk},{ae},{us}","StrictNodes 0"
+                }
+            }
+            $cleanCfg += "","# --- MANAGED BRIDGES ---","Log notice file tor.log"
+            
+            if ($App.Config.enableOutboundProxy -and $App.Config.outboundProxyAddress -and $App.Config.outboundProxyPort) {
+                if ($App.Config.outboundProxyType -eq "SOCKS5") {
+                    $cleanCfg += "Socks5Proxy $($App.Config.outboundProxyAddress):$($App.Config.outboundProxyPort)"
+                    if ($App.Config.enableOutboundAuth -and $App.Config.outboundProxyUser -and $App.Config.outboundProxyPass) {
+                        $cleanCfg += "Socks5ProxyUsername $($App.Config.outboundProxyUser)","Socks5ProxyPassword $($App.Config.outboundProxyPass)"
+                    }
+                } elseif ($App.Config.outboundProxyType -eq "HTTPS") {
+                    $cleanCfg += "HTTPSProxy $($App.Config.outboundProxyAddress):$($App.Config.outboundProxyPort)"
+                    if ($App.Config.enableOutboundAuth -and $App.Config.outboundProxyUser -and $App.Config.outboundProxyPass) {
+                        $cleanCfg += "HTTPSProxyAuthenticator $($App.Config.outboundProxyUser):$($App.Config.outboundProxyPass)"
+                    }
+                }
+            } elseif ($App.Config.enableTorDoh) { $cleanCfg += "Socks5Proxy 127.0.0.1:10820" }
+            
+            if ($selBridge -eq "Custom" -and $App.Config.customBridgeLine) {
+                $cleanCfg += "UseBridges 1"
+                $cleanCfg += "ClientTransportPlugin meek_lite,obfs2,obfs3,obfs4,scramblesuit,webtunnel,snowflake exec ..\..\PluggableTransports\lyrebird.exe"
+                $App.Config.customBridgeLine.Split("`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -notmatch "^ClientTransportPlugin" } | ForEach-Object {
+                    $cleanCfg += if ($_ -notmatch "^Bridge\s") { "Bridge $_" } else { $_ }
+                }
+            } elseif ($selBridge -ne "Direct (None)") {
+                $b = $bridgeData[$selBridge]
+                $cleanCfg += "UseBridges 1",$b.plugin
+                foreach ($bl in $b.lines) { $cleanCfg += $bl }
+            } else { $cleanCfg += "UseBridges 0" }
+            
+            $cleanCfg | Set-Content "$path\$torrcFile"
+            Start-Process -FilePath "$path\tor.exe" -ArgumentList "-f $torrcFile" -WorkingDirectory $path -WindowStyle $winStyle
+            Wait-NonBlocking $dynamicWait
         }
-        if (-not $global:abortBoot) {
-            $btnActionSubText.Text = "Booting Core Engines"
+        if (-not $App.State.abortBoot) {
+            $App.UI.btnActionSubText.Text = "Booting Core Engines"
             DoEvents
-            $xrayLogPath = Get-AppPath "Data\Xray\access.log"
-            if (Test-Path $xrayLogPath) { Remove-Item $xrayLogPath -ErrorAction SilentlyContinue }
-            $xrayErrPath = Get-AppPath "Data\Xray\error.log"
-            if (Test-Path $xrayErrPath) { Remove-Item $xrayErrPath -ErrorAction SilentlyContinue }
-            if (Test-Path (Get-AppPath "Data\HAproxy\haproxy.exe")) { 
-                Start-Process -FilePath (Get-AppPath "Data\HAproxy\haproxy.exe") -ArgumentList "-f haproxy.cfg" -WorkingDirectory $haPath -WindowStyle $winStyle 
+            Remove-Item (Get-AppPath "Data\Xray\access.log") -ErrorAction SilentlyContinue
+            Remove-Item (Get-AppPath "Data\Xray\error.log")  -ErrorAction SilentlyContinue
+            if (Test-Path (Get-AppPath "Data\HAproxy\haproxy.exe")) {
+                Start-Process -FilePath (Get-AppPath "Data\HAproxy\haproxy.exe") -ArgumentList "-f haproxy.cfg" -WorkingDirectory $App.Config.haPath -WindowStyle $winStyle
             }
             Restart-Xray $mode
-            $lblSocksTitle.Text   = "MIXED PORT"
-            $lblSocksDataIPs.Text = "127.0.0.1:10818`n$lanIp`:10818"
-            $lblSocksDataTags.Text = "(Local)`n(LAN)"
-            $global:isConnected      = $true
-            $global:sessionStartTime = Get-Date
-            $btnActionMainText.Text  = "CONNECTED"
-            $btnActionSubText.Text   = ""
-            $btnActionMainText.Foreground = "#68D391"
+            $App.UI.lblSocksTitle.Text    = "MIXED PORT"
+            $App.UI.lblSocksDataIPs.Text  = "127.0.0.1:10818`n$($App.State.lanIp)`:10818"
+            $App.UI.lblSocksDataTags.Text = "(Local)`n(LAN)"
+            $App.State.isConnected        = $true
+            $App.State.sessionStartTime   = Get-Date
+            $App.UI.btnActionMainText.Text      = "CONNECTED"
+            $App.UI.btnActionSubText.Text        = ""
+            $App.UI.btnActionMainText.Foreground = $App.UI.brGreen
             Start-GeoPing
             Update-WaveAnimation -State "Connected"
         } else { Reset-ButtonText }
     } catch {
-        [System.Windows.Forms.MessageBox]::Show("A startup error occurred:`n" + $_.Exception.Message, "Error", 0, 16)
+        [System.Windows.Forms.MessageBox]::Show("A startup error occurred:`n$($_.Exception.Message)", "Error", 0, 16)
         Reset-ButtonText
     }
 }
 
-$btnTitleUpdate.Add_Click({ Update-Application })
-
+#  UPDATE
+$App.UI.btnTitleUpdate.Add_Click({ Update-Application })
 function Update-Application {
-    $btnTitleUpdate.IsEnabled = $false
-    $lblTitleText.Text = "CHECKING FOR UPDATES..."
-    $manualUpdateClient = New-Object System.Net.WebClient
-    $manualUpdateClient.Add_DownloadStringCompleted({
+    $App.UI.btnTitleUpdate.IsEnabled = $false
+    $App.UI.lblTitleText.Text = "CHECKING FOR UPDATES..."
+    $wc = New-Object System.Net.WebClient
+    $wc.Add_DownloadStringCompleted({
         param($sender, $e)
-        $form.Dispatcher.Invoke([System.Action]{
-            $btnTitleUpdate.IsEnabled = $true
+        $App.UI.form.Dispatcher.Invoke([System.Action]{
+            $App.UI.btnTitleUpdate.IsEnabled = $true
             if (-not $e.Cancelled -and $null -eq $e.Error) {
-                $remoteCode = $e.Result
-                if ($remoteCode -match '\$global:currentVersion\s*=\s*"([^"]+)"') {
-                    $remoteVer = $matches[1]
-                    if ([version]$remoteVer -gt [version]$global:currentVersion) {
-                        $lblTitleText.Text = "TOR MULTIPLEXER v$global:currentVersion - NEW UPDATE AVAILABLE ($remoteVer)"
-                        $lblTitleText.Foreground = [System.Windows.Media.Brushes]::White
+                if ($e.Result -match '\$App\.Config\.currentVersion\s*=\s*"([^"]+)"|currentVersion\s*=\s*"([^"]+)"') {
+                    $remoteVer = if ($matches[1]) { $matches[1] } else { $matches[2] }
+                    if ([version]$remoteVer -gt [version]$App.Config.currentVersion) {
+                        $remoteMinVer = "0.0.0" # Default fallback
+                        if ($e.Result -match 'minAutoUpdateVersion\s*=\s*"([^"]+)"') {
+                            $remoteMinVer = $matches[1]
+                        }
+                        if ([version]$App.Config.currentVersion -lt [version]$remoteMinVer) {
+                            $App.UI.lblTitleText.Text = "MANUAL UPDATE REQUIRED ($remoteVer)"
+                            $App.UI.lblTitleText.Foreground = $App.UI.brRed
+                            [System.Windows.Forms.MessageBox]::Show("A major update (v$remoteVer) is available!`n`nYour current version ($($App.Config.currentVersion)) is too old to update automatically.`n`nPlease download the latest release manually from GitHub.", "Manual Update Required", 0, 48)
+                            Start-Process $App.Config.repoReleaseUrl
+                            return
+                        }
+                        $App.UI.lblTitleText.Text       = "TOR MULTIPLEXER v$($App.Config.currentVersion) — UPDATE AVAILABLE ($remoteVer)"
+                        $App.UI.lblTitleText.Foreground = $App.UI.brWhite
                         $msg = [System.Windows.Forms.MessageBox]::Show("Version $remoteVer is available! Update now?", "Update Available", 4, 64)
                         if ($msg -eq "Yes") {
-        Invoke-WebRequest -Uri $repoRawUrl -OutFile $global:scriptPath
-        $launcherPath = Get-AppPath "Launch Multiplexer.exe"
-        if (Test-Path $launcherPath) {
-            Start-Process -FilePath $launcherPath -WorkingDirectory $global:baseDir
-        } else {
-            Start-Process powershell.exe -ArgumentList "-STA -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$global:scriptPath`""
-        }
-        
-        [Environment]::Exit(0)
-    }
+                            $dlClient = New-Object System.Net.WebClient
+                            $dlClient.DownloadFile($App.Config.repoRawUrl, $App.Config.scriptPath)
+                            $dlClient.Dispose()
+                            $launcher = Get-AppPath "Launch Multiplexer.exe"
+                            if (Test-Path $launcher) { Start-Process -FilePath $launcher -WorkingDirectory $App.Config.baseDir }
+                            else { Start-Process powershell.exe -ArgumentList "-STA -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$($App.Config.scriptPath)`"" }
+                            [Environment]::Exit(0)
+                        }
                     } else {
-                        $lblTitleText.Text = "TOR MULTIPLEXER v$global:currentVersion"
+                        $App.UI.lblTitleText.Text = "TOR MULTIPLEXER v$($App.Config.currentVersion)"
                         [System.Windows.Forms.MessageBox]::Show("You are already on the latest version!", "Up to Date", 0, 64)
                     }
                 }
             } else {
-                $lblTitleText.Text = "TOR MULTIPLEXER v$global:currentVersion"
-                [System.Windows.Forms.MessageBox]::Show("Update check failed.", "Error", 0, 16)
+                $App.UI.lblTitleText.Text = "TOR MULTIPLEXER v$($App.Config.currentVersion)"
+                [System.Windows.Forms.MessageBox]::Show("Update check failed. Check your internet connection.", "Error", 0, 16)
             }
         }.GetNewClosure())
         $sender.Dispose()
     })
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    try { $manualUpdateClient.DownloadStringAsync([uri]$repoRawUrl) } 
-    catch { 
-        $btnTitleUpdate.IsEnabled = $true
-        $lblTitleText.Text = "TOR MULTIPLEXER v$global:currentVersion" 
-    }
+    try { $wc.DownloadStringAsync([uri]$App.Config.repoRawUrl) }
+    catch { $App.UI.btnTitleUpdate.IsEnabled = $true; $App.UI.lblTitleText.Text = "TOR MULTIPLEXER v$($App.Config.currentVersion)" }
 }
 
 function Check-UpdateSilent {
-    $updateWebClient = New-Object System.Net.WebClient
-    $updateWebClient.Add_DownloadStringCompleted({
+    $localForm  = $App.UI.form
+    $localTitle = $App.UI.lblTitleText
+    $localVer   = $App.Config.currentVersion
+    $localUrl   = $App.Config.repoRawUrl
+    $localBrW   = $App.UI.brWhite
+    $wc = New-Object System.Net.WebClient
+    $wc.Add_DownloadStringCompleted({
         param($sender, $e)
         if (-not $e.Cancelled -and $null -eq $e.Error) {
             try {
-                if ($e.Result -match '\$global:currentVersion\s*=\s*"([^"]+)"') {
-                    if ([version]$matches[1] -gt [version]$global:currentVersion) {
-                        $form.Dispatcher.Invoke([System.Action]{ 
-                            if ($null -ne $lblTitleText) {
-                                $lblTitleText.Text       = "TOR MULTIPLEXER v$global:currentVersion  —  UPDATE AVAILABLE"
-                                $lblTitleText.Foreground = [System.Windows.Media.Brushes]::White
+                if ($e.Result -match 'currentVersion\s*=\s*"([^"]+)"') {
+                    if ([version]$matches[1] -gt [version]$localVer) {
+                        $localForm.Dispatcher.Invoke([System.Action]{
+                            if ($null -ne $localTitle) {
+                                $localTitle.Text       = "TOR MULTIPLEXER v$localVer  —  UPDATE AVAILABLE"
+                                $localTitle.Foreground = $localBrW
                             }
-                        }.GetNewClosure())
+                        })
                     }
                 }
             } catch {}
@@ -2276,258 +2209,241 @@ function Check-UpdateSilent {
         $sender.Dispose()
     }.GetNewClosure())
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    try { $updateWebClient.DownloadStringAsync([uri]$repoRawUrl) } catch {}
+    try { $wc.DownloadStringAsync([uri]$localUrl) } catch {}
 }
 
 function Update-BootShortcut {
     $taskName = "TorMultiplexer_AutoStart"
-    if ($script:launchOnBoot) {
-        try { 
-            $action    = New-ScheduledTaskAction -Execute (Get-AppPath "Launch Multiplexer.exe") -WorkingDirectory $global:baseDir
+    if ($App.Config.launchOnBoot) {
+        try {
+            $action    = New-ScheduledTaskAction -Execute (Get-AppPath "Launch Multiplexer.exe") -WorkingDirectory $App.Config.baseDir
             $trigger   = New-ScheduledTaskTrigger -AtLogOn
             $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
             $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit 0
             Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
-        } catch { 
+        } catch {
             [System.Windows.Forms.MessageBox]::Show("Failed to create Auto-Start task.`n$($_.Exception.Message)", "Error", 0, 16)
-            $script:launchOnBoot = $false
-            Set-WpfToggleState $btnBootTog $false
+            $App.Config.launchOnBoot = $false
+            Set-WpfToggleState $App.UI.btnBootTog $false
         }
-    } else { 
-        try { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue } catch {} 
+    } else {
+        try { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue } catch {}
     }
-    $oldShortcut = Join-Path ([Environment]::GetFolderPath('Startup')) "TorMultiplexer.lnk"
-    if (Test-Path $oldShortcut) { Remove-Item $oldShortcut -Force -ErrorAction SilentlyContinue }
+    $old = Join-Path ([Environment]::GetFolderPath('Startup')) "TorMultiplexer.lnk"
+    if (Test-Path $old) { Remove-Item $old -Force -ErrorAction SilentlyContinue }
 }
 
-function Disable-SystemProxy {
-    try {
-        $path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
-        Set-ItemProperty $path -Name "ProxyEnable" -Value 0 -ErrorAction SilentlyContinue
-        [Win32.WinInet]::InternetSetOption([IntPtr]::Zero, 39, [IntPtr]::Zero, 0) | Out-Null
-        [Win32.WinInet]::InternetSetOption([IntPtr]::Zero, 37, [IntPtr]::Zero, 0) | Out-Null
-    } catch {}
-}
-
-# STATS ENGINE & SESSION TIME TICKER
-$global:statsWebClient = New-Object System.Net.WebClient
-$global:isFetchingStats = $false
-$global:statsWebClient.Add_DownloadStringCompleted({
+#  STATS TIMER
+$App.Runtime.statsWebClient = New-Object System.Net.WebClient
+$App.Runtime.statsWebClient.Add_DownloadStringCompleted({
     param($sender, $e)
     if (-not $e.Cancelled -and $null -eq $e.Error) {
         try {
-            $rows       = $e.Result -split "`n"
-            $torServers = $rows | Where-Object { $_ -match ",tor\d+," }
-            $currentBytes = 0
-            foreach ($server in $torServers) { 
-                $cols = $server -split ","
-                if ($cols.Count -ge 10) { $currentBytes += [long]$cols[8] + [long]$cols[9] } 
+            $rows    = $e.Result -split "`n"
+            $servers = $rows | Where-Object { $_ -match ",tor\d+," }
+            $curBytes = 0
+            foreach ($srv in $servers) {
+                $cols = $srv -split ","
+                if ($cols.Count -ge 10) { $curBytes += [long]$cols[8] + [long]$cols[9] }
             }
-            if ($global:lastTotalBytes -gt 0) {
-                $diff = [Math]::Max(0, ($currentBytes - $global:lastTotalBytes))
-                $global:sessionDataBytes += $diff
-                $global:speedSamples = @($diff) + $global:speedSamples[0..3]
-                $avgDiff = ($global:speedSamples | Measure-Object -Average).Average
-                $speedStr = if ($avgDiff -ge 1048576) { "$([Math]::Round($avgDiff/1048576, 2)) MB/s" } 
-                            elseif ($avgDiff -ge 1024)   { "$([Math]::Round($avgDiff/1024, 1)) KB/s" } 
-                            else                          { "$([int]$avgDiff) B/s" }
-                $totStr   = if ($global:sessionDataBytes -ge 1073741824) { "$([Math]::Round($global:sessionDataBytes/1073741824, 2)) GB" } 
-                            elseif ($global:sessionDataBytes -ge 1048576)  { "$([Math]::Round($global:sessionDataBytes/1048576, 1)) MB" } 
-                            else                                            { "$([Math]::Round($global:sessionDataBytes/1024, 1)) KB" }
-                $form.Dispatcher.Invoke([System.Action]{ 
-                    if ($null -ne $lblStatsData) { $lblStatsData.Text = "Speed: $speedStr`nTotal: $totStr" }
+            if ($App.State.lastTotalBytes -gt 0) {
+                $diff = [Math]::Max(0, ($curBytes - $App.State.lastTotalBytes))
+                $App.State.sessionDataBytes += $diff
+                $App.State.speedSamples = @($diff) + $App.State.speedSamples[0..3]
+                $avg  = ($App.State.speedSamples | Measure-Object -Average).Average
+                $spd  = if ($avg -ge 1048576) { "$([Math]::Round($avg/1048576,2)) MB/s" } elseif ($avg -ge 1024) { "$([Math]::Round($avg/1024,1)) KB/s" } else { "$([int]$avg) B/s" }
+                $tot  = if ($App.State.sessionDataBytes -ge 1073741824) { "$([Math]::Round($App.State.sessionDataBytes/1073741824,2)) GB" } elseif ($App.State.sessionDataBytes -ge 1048576) { "$([Math]::Round($App.State.sessionDataBytes/1048576,1)) MB" } else { "$([Math]::Round($App.State.sessionDataBytes/1024,1)) KB" }
+                $App.UI.form.Dispatcher.Invoke([System.Action]{
+                    if ($null -ne $App.UI.lblStatsData) { $App.UI.lblStatsData.Text = "Speed: $spd`nTotal: $tot" }
                 })
             }
-            if ($currentBytes -gt 0) { $global:lastTotalBytes = $currentBytes }
+            if ($curBytes -gt 0) { $App.State.lastTotalBytes = $curBytes }
         } catch {}
     }
-    $global:isFetchingStats = $false
+    $App.Runtime.isFetchingStats = $false
 }.GetNewClosure())
 
-$global:statsTimer = New-Object System.Windows.Threading.DispatcherTimer
-$global:statsTimer.Interval = [TimeSpan]::FromSeconds(1)
-$global:statsTimer.add_Tick({
-    if ($null -eq $form -or $form.Dispatcher.HasShutdownStarted) { $global:statsTimer.Stop(); return }
-    if ($global:isConnected) {
-        if ($null -ne $global:sessionStartTime) {
-            $elapsed = (Get-Date) - $global:sessionStartTime
-            if ($null -ne $lblSessionTime) {
-                $lblSessionTime.Text       = "SESSION: " + $elapsed.ToString("hh\:mm\:ss")
-                $lblSessionTime.Foreground = $global:brushGreen
-            }
+$App.Runtime.statsTimer = New-Object System.Windows.Threading.DispatcherTimer
+$App.Runtime.statsTimer.Interval = [TimeSpan]::FromSeconds(1)
+$App.Runtime.statsTimer.add_Tick({
+    if ($null -eq $App.UI.form -or $App.UI.form.Dispatcher.HasShutdownStarted) { $App.Runtime.statsTimer.Stop(); return }
+    if ($App.State.isConnected) {
+        if ($null -ne $App.State.sessionStartTime -and $null -ne $App.UI.lblSessionTime) {
+            $elapsed = (Get-Date) - $App.State.sessionStartTime
+            $App.UI.lblSessionTime.Text       = "SESSION: " + $elapsed.ToString("hh\:mm\:ss")
+            $App.UI.lblSessionTime.Foreground = $App.UI.brGreen
         }
-        if (-not $global:isFetchingStats -and $null -ne $global:statsWebClient) {
-            $global:isFetchingStats = $true
-            try { $global:statsWebClient.DownloadStringAsync([uri]"http://127.0.0.1:10888/stats;csv") } 
-            catch { $global:isFetchingStats = $false }
+        if (-not $App.Runtime.isFetchingStats -and $null -ne $App.Runtime.statsWebClient) {
+            $App.Runtime.isFetchingStats = $true
+            try { $App.Runtime.statsWebClient.DownloadStringAsync([uri]"http://127.0.0.1:10888/stats;csv") }
+            catch { $App.Runtime.isFetchingStats = $false }
         }
     }
 }.GetNewClosure())
-$global:statsTimer.Start()
+$App.Runtime.statsTimer.Start()
 
-# WINDOW SIZING & ANIMATION STATE MACHINE
+#  WINDOW SIZE / PANEL ANIMATION
 function Update-WindowSize {
-    $ts = New-Object TimeSpan(0, 0, 0, 0, 300)
-    $targetW  = if ($global:isLogsOpen -and $global:isAdvancedOpen) { 909.0  } else { 595.0 }
-    $targetH  = if ($global:isAdvancedOpen -or $global:isLogsOpen)  { 534.0  } else { 340.0 }
-    $panelTop = if ($global:isAdvancedOpen -or $global:isLogsOpen)  { 424.0  } else { 230.0 }
-    if ($global:isAdvancedOpen -or $global:isLogsOpen) {
-        $UnifiedPanel.CornerRadius    = New-Object System.Windows.CornerRadius(0, 0, 4, 4)
-        $UnifiedPanel.BorderThickness = New-Object System.Windows.Thickness(1, 0, 1, 1)
+    $ts       = New-Object TimeSpan(0,0,0,0,300)
+    $targetW  = if ($App.State.isLogsOpen -and $App.State.isAdvancedOpen) { 909.0  } else { 595.0 }
+    $targetH  = if ($App.State.isAdvancedOpen -or $App.State.isLogsOpen)  { 534.0  } else { 340.0 }
+    $panelTop = if ($App.State.isAdvancedOpen -or $App.State.isLogsOpen)  { 424.0  } else { 230.0 }
+    
+    if ($App.State.isAdvancedOpen -or $App.State.isLogsOpen) {
+        $App.UI.UnifiedPanel.CornerRadius    = New-Object System.Windows.CornerRadius(0,0,4,4)
+        $App.UI.UnifiedPanel.BorderThickness = New-Object System.Windows.Thickness(1,0,1,1)
     } else {
-        $UnifiedPanel.CornerRadius    = New-Object System.Windows.CornerRadius(4)
-        $UnifiedPanel.BorderThickness = New-Object System.Windows.Thickness(1)
+        $App.UI.UnifiedPanel.CornerRadius    = New-Object System.Windows.CornerRadius(4)
+        $App.UI.UnifiedPanel.BorderThickness = New-Object System.Windows.Thickness(1)
     }
-    if ($global:isAdvancedOpen) {
-        $AdvancedBorder.CornerRadius = New-Object System.Windows.CornerRadius(4, 4, 0, 0)
-        $AdvancedCanvas.Visibility = "Visible"
-        $advOpac = 1.0
-    } else { $advOpac = 0.0 }
-    if ($global:isLogsOpen) {
-        $LogsCanvas.Visibility = "Visible"; $logTimer.Start(); $logOpac = 1.0
-        if ($global:isAdvancedOpen) {
-            # MODE A: Side-Panel
-            $LogsCanvas.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty,   (New-Object System.Windows.Media.Animation.DoubleAnimation(585.0,  $ts)))
-            $LogsCanvas.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,    (New-Object System.Windows.Media.Animation.DoubleAnimation(15.0,   $ts)))
-            $LogsCanvas.BeginAnimation([System.Windows.FrameworkElement]::WidthProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(300.0,  $ts)))
-            $LogsCanvas.BeginAnimation([System.Windows.FrameworkElement]::HeightProperty,(New-Object System.Windows.Media.Animation.DoubleAnimation(474.0,  $ts)))
-            $logBorder.CornerRadius = New-Object System.Windows.CornerRadius(4)
-            $logBorder.BeginAnimation([System.Windows.FrameworkElement]::WidthProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(300.0,  $ts)))
-            $logBorder.BeginAnimation([System.Windows.FrameworkElement]::HeightProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(474.0,  $ts)))
-            $btnCloseLogs.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(272.0,  $ts)))
-            $lblTor1.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(30.0,  $ts)))
-            $lblTor2.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(48.0,  $ts)))
-            $lblTor3.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(66.0,  $ts)))
-            $lblTor4.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(84.0,  $ts)))
-            $lblTor5.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(155.0, $ts)))
-            $lblTor5.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(30.0,  $ts)))
-            $lblTor6.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(155.0, $ts)))
-            $lblTor6.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(48.0,  $ts)))
-            $lblTor7.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(155.0, $ts)))
-            $lblTor7.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(66.0,  $ts)))
-            $lblTor8.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(155.0, $ts)))
-            $lblTor8.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(84.0,  $ts)))
-            $logSeparator.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty,   (New-Object System.Windows.Media.Animation.DoubleAnimation(15.0,  $ts)))
-            $logSeparator.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,    (New-Object System.Windows.Media.Animation.DoubleAnimation(110.0, $ts)))
-            $logSeparator.BeginAnimation([System.Windows.FrameworkElement]::WidthProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(270.0, $ts)))
-            $logSeparator.BeginAnimation([System.Windows.FrameworkElement]::HeightProperty,(New-Object System.Windows.Media.Animation.DoubleAnimation(1.0,   $ts)))
-            $lblConnTitle.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty,   (New-Object System.Windows.Media.Animation.DoubleAnimation(15.0,  $ts)))
-            $lblConnTitle.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,    (New-Object System.Windows.Media.Animation.DoubleAnimation(120.0, $ts)))
-            $txtXrayLogs.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty,    (New-Object System.Windows.Media.Animation.DoubleAnimation(15.0,  $ts)))
-            $txtXrayLogs.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,     (New-Object System.Windows.Media.Animation.DoubleAnimation(138.0, $ts)))
-            $txtXrayLogs.BeginAnimation([System.Windows.FrameworkElement]::WidthProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(270.0, $ts)))
-            $txtXrayLogs.BeginAnimation([System.Windows.FrameworkElement]::HeightProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(321.0, $ts)))
+    
+    $advOpac = if ($App.State.isAdvancedOpen) {
+        $App.UI.AdvancedBorder.CornerRadius = New-Object System.Windows.CornerRadius(4,4,0,0)
+        $App.UI.AdvancedCanvas.Visibility = "Visible"; 1.0
+    } else { 0.0 }
+    
+    if ($App.State.isLogsOpen) {
+        $App.UI.LogsCanvas.Visibility = "Visible"; $logTimer.Start()
+        if ($App.State.isAdvancedOpen) {
+            # MODE A — side panel
+            $App.UI.LogsCanvas.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty,    (New-Object System.Windows.Media.Animation.DoubleAnimation(585.0,  $ts)))
+            $App.UI.LogsCanvas.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,     (New-Object System.Windows.Media.Animation.DoubleAnimation(15.0,   $ts)))
+            $App.UI.LogsCanvas.BeginAnimation([System.Windows.FrameworkElement]::WidthProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(300.0,  $ts)))
+            $App.UI.LogsCanvas.BeginAnimation([System.Windows.FrameworkElement]::HeightProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(474.0,  $ts)))
+            $App.UI.logBorder.CornerRadius = New-Object System.Windows.CornerRadius(4)
+            $App.UI.logBorder.BeginAnimation([System.Windows.FrameworkElement]::WidthProperty,   (New-Object System.Windows.Media.Animation.DoubleAnimation(300.0,  $ts)))
+            $App.UI.logBorder.BeginAnimation([System.Windows.FrameworkElement]::HeightProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(474.0,  $ts)))
+            $App.UI.btnCloseLogs.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(272.0,  $ts)))
+            $App.UI.lblTor1.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(30.0, $ts)))
+            $App.UI.lblTor2.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(48.0, $ts)))
+            $App.UI.lblTor3.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(66.0, $ts)))
+            $App.UI.lblTor4.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(84.0, $ts)))
+            $App.UI.lblTor5.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(155.0,$ts)))
+            $App.UI.lblTor5.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(30.0, $ts)))
+            $App.UI.lblTor6.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(155.0,$ts)))
+            $App.UI.lblTor6.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(48.0, $ts)))
+            $App.UI.lblTor7.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(155.0,$ts)))
+            $App.UI.lblTor7.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(66.0, $ts)))
+            $App.UI.lblTor8.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(155.0,$ts)))
+            $App.UI.lblTor8.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(84.0, $ts)))
+            $App.UI.logSeparator.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty,    (New-Object System.Windows.Media.Animation.DoubleAnimation(15.0,  $ts)))
+            $App.UI.logSeparator.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,     (New-Object System.Windows.Media.Animation.DoubleAnimation(110.0, $ts)))
+            $App.UI.logSeparator.BeginAnimation([System.Windows.FrameworkElement]::WidthProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(270.0, $ts)))
+            $App.UI.logSeparator.BeginAnimation([System.Windows.FrameworkElement]::HeightProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(1.0,   $ts)))
+            $App.UI.lblConnTitle.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty,    (New-Object System.Windows.Media.Animation.DoubleAnimation(15.0,  $ts)))
+            $App.UI.lblConnTitle.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,     (New-Object System.Windows.Media.Animation.DoubleAnimation(120.0, $ts)))
+            $App.UI.txtXrayLogs.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty,     (New-Object System.Windows.Media.Animation.DoubleAnimation(15.0,  $ts)))
+            $App.UI.txtXrayLogs.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,      (New-Object System.Windows.Media.Animation.DoubleAnimation(138.0, $ts)))
+            $App.UI.txtXrayLogs.BeginAnimation([System.Windows.FrameworkElement]::WidthProperty,   (New-Object System.Windows.Media.Animation.DoubleAnimation(270.0, $ts)))
+            $App.UI.txtXrayLogs.BeginAnimation([System.Windows.FrameworkElement]::HeightProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(321.0, $ts)))
         } else {
-            # MODE B: Bottom-Panel
-            $LogsCanvas.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty,   (New-Object System.Windows.Media.Animation.DoubleAnimation(20.0,  $ts)))
-            $LogsCanvas.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,    (New-Object System.Windows.Media.Animation.DoubleAnimation(230.0, $ts)))
-            $LogsCanvas.BeginAnimation([System.Windows.FrameworkElement]::WidthProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(550.0, $ts)))
-            $LogsCanvas.BeginAnimation([System.Windows.FrameworkElement]::HeightProperty,(New-Object System.Windows.Media.Animation.DoubleAnimation(194.0, $ts)))
-            $logBorder.CornerRadius = New-Object System.Windows.CornerRadius(4, 4, 0, 0)
-            $logBorder.BeginAnimation([System.Windows.FrameworkElement]::WidthProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(550.0, $ts)))
-            $logBorder.BeginAnimation([System.Windows.FrameworkElement]::HeightProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(194.0, $ts)))
-            $btnCloseLogs.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(522.0, $ts)))
-            $lblTor1.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(15.0,  $ts)))
-            $lblTor1.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(31.0,  $ts)))
-            $lblTor2.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(15.0,  $ts)))
-            $lblTor2.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(50.0,  $ts)))
-            $lblTor3.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(15.0,  $ts)))
-            $lblTor3.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(69.0,  $ts)))
-            $lblTor4.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(15.0,  $ts)))
-            $lblTor4.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(88.0,  $ts)))
-            $lblTor5.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(15.0,  $ts)))
-            $lblTor5.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(107.0, $ts)))
-            $lblTor6.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(15.0,  $ts)))
-            $lblTor6.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(126.0, $ts)))
-            $lblTor7.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(15.0,  $ts)))
-            $lblTor7.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(145.0, $ts)))
-            $lblTor8.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(15.0,  $ts)))
-            $lblTor8.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(164.0, $ts)))
-            $logSeparator.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty,   (New-Object System.Windows.Media.Animation.DoubleAnimation(152.0, $ts)))
-            $logSeparator.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,    (New-Object System.Windows.Media.Animation.DoubleAnimation(0.0,   $ts)))
-            $logSeparator.BeginAnimation([System.Windows.FrameworkElement]::WidthProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(1.0,   $ts)))
-            $logSeparator.BeginAnimation([System.Windows.FrameworkElement]::HeightProperty,(New-Object System.Windows.Media.Animation.DoubleAnimation(193.0, $ts)))
-            $lblConnTitle.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty,   (New-Object System.Windows.Media.Animation.DoubleAnimation(169.0, $ts)))
-            $lblConnTitle.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,    (New-Object System.Windows.Media.Animation.DoubleAnimation(10.0,  $ts)))
-            $txtXrayLogs.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty,    (New-Object System.Windows.Media.Animation.DoubleAnimation(169.0, $ts)))
-            $txtXrayLogs.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,     (New-Object System.Windows.Media.Animation.DoubleAnimation(30.0,  $ts)))
-            $txtXrayLogs.BeginAnimation([System.Windows.FrameworkElement]::WidthProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(364.0, $ts)))
-            $txtXrayLogs.BeginAnimation([System.Windows.FrameworkElement]::HeightProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(150.0, $ts)))
+            # MODE B — bottom panel
+            $App.UI.LogsCanvas.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty,    (New-Object System.Windows.Media.Animation.DoubleAnimation(20.0,  $ts)))
+            $App.UI.LogsCanvas.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,     (New-Object System.Windows.Media.Animation.DoubleAnimation(230.0, $ts)))
+            $App.UI.LogsCanvas.BeginAnimation([System.Windows.FrameworkElement]::WidthProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(550.0, $ts)))
+            $App.UI.LogsCanvas.BeginAnimation([System.Windows.FrameworkElement]::HeightProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(194.0, $ts)))
+            $App.UI.logBorder.CornerRadius = New-Object System.Windows.CornerRadius(4,4,0,0)
+            $App.UI.logBorder.BeginAnimation([System.Windows.FrameworkElement]::WidthProperty,   (New-Object System.Windows.Media.Animation.DoubleAnimation(550.0, $ts)))
+            $App.UI.logBorder.BeginAnimation([System.Windows.FrameworkElement]::HeightProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(194.0, $ts)))
+            $App.UI.btnCloseLogs.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(522.0, $ts)))
+            $App.UI.lblTor1.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(15.0,  $ts)))
+            $App.UI.lblTor1.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(31.0,  $ts)))
+            $App.UI.lblTor2.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(15.0,  $ts)))
+            $App.UI.lblTor2.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(50.0,  $ts)))
+            $App.UI.lblTor3.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(15.0,  $ts)))
+            $App.UI.lblTor3.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(69.0,  $ts)))
+            $App.UI.lblTor4.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(15.0,  $ts)))
+            $App.UI.lblTor4.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(88.0,  $ts)))
+            $App.UI.lblTor5.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(15.0,  $ts)))
+            $App.UI.lblTor5.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(107.0, $ts)))
+            $App.UI.lblTor6.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(15.0,  $ts)))
+            $App.UI.lblTor6.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(126.0, $ts)))
+            $App.UI.lblTor7.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(15.0,  $ts)))
+            $App.UI.lblTor7.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(145.0, $ts)))
+            $App.UI.lblTor8.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(15.0,  $ts)))
+            $App.UI.lblTor8.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(164.0, $ts)))
+            $App.UI.logSeparator.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty,    (New-Object System.Windows.Media.Animation.DoubleAnimation(152.0, $ts)))
+            $App.UI.logSeparator.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,     (New-Object System.Windows.Media.Animation.DoubleAnimation(0.0,   $ts)))
+            $App.UI.logSeparator.BeginAnimation([System.Windows.FrameworkElement]::WidthProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(1.0,   $ts)))
+            $App.UI.logSeparator.BeginAnimation([System.Windows.FrameworkElement]::HeightProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation(193.0, $ts)))
+            $App.UI.lblConnTitle.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty,    (New-Object System.Windows.Media.Animation.DoubleAnimation(169.0, $ts)))
+            $App.UI.lblConnTitle.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,     (New-Object System.Windows.Media.Animation.DoubleAnimation(10.0,  $ts)))
+            $App.UI.txtXrayLogs.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty,     (New-Object System.Windows.Media.Animation.DoubleAnimation(169.0, $ts)))
+            $App.UI.txtXrayLogs.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty,      (New-Object System.Windows.Media.Animation.DoubleAnimation(30.0,  $ts)))
+            $App.UI.txtXrayLogs.BeginAnimation([System.Windows.FrameworkElement]::WidthProperty,   (New-Object System.Windows.Media.Animation.DoubleAnimation(364.0, $ts)))
+            $App.UI.txtXrayLogs.BeginAnimation([System.Windows.FrameworkElement]::HeightProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation(150.0, $ts)))
         }
+        $logOpac = 1.0
     } else { $logOpac = 0.0; $logTimer.Stop() }
-    $form.BeginAnimation([System.Windows.Window]::WidthProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation($targetW, $ts)))
-    $form.BeginAnimation([System.Windows.Window]::HeightProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation($targetH, $ts)))
-    $AdvancedCanvas.BeginAnimation([System.Windows.UIElement]::OpacityProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation($advOpac, $ts)))
-    $LogsCanvas.BeginAnimation([System.Windows.UIElement]::OpacityProperty,     (New-Object System.Windows.Media.Animation.DoubleAnimation($logOpac, $ts)))
-    $UnifiedPanel.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation($panelTop, $ts)))
-    if (-not $global:isAdvancedOpen) {
-        $global:hideAdvTimer = New-Object System.Windows.Threading.DispatcherTimer
-        $global:hideAdvTimer.Interval = [TimeSpan]::FromMilliseconds(300)
-        $global:hideAdvTimer.add_Tick({ $global:hideAdvTimer.Stop(); $AdvancedCanvas.Visibility = "Hidden" }.GetNewClosure())
-        $global:hideAdvTimer.Start()
+    
+    $App.UI.form.BeginAnimation([System.Windows.Window]::WidthProperty,  (New-Object System.Windows.Media.Animation.DoubleAnimation($targetW, $ts)))
+    $App.UI.form.BeginAnimation([System.Windows.Window]::HeightProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation($targetH, $ts)))
+    $App.UI.AdvancedCanvas.BeginAnimation([System.Windows.UIElement]::OpacityProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation($advOpac, $ts)))
+    $App.UI.LogsCanvas.BeginAnimation([System.Windows.UIElement]::OpacityProperty,     (New-Object System.Windows.Media.Animation.DoubleAnimation($logOpac, $ts)))
+    $App.UI.UnifiedPanel.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation($panelTop, $ts)))
+    
+    if (-not $App.State.isAdvancedOpen) {
+        $App.Runtime.hideAdvTimer = New-Object System.Windows.Threading.DispatcherTimer
+        $App.Runtime.hideAdvTimer.Interval = [TimeSpan]::FromMilliseconds(300)
+        $App.Runtime.hideAdvTimer.add_Tick({ $App.Runtime.hideAdvTimer.Stop(); $App.UI.AdvancedCanvas.Visibility = "Hidden" }.GetNewClosure())
+        $App.Runtime.hideAdvTimer.Start()
     }
-    if (-not $global:isLogsOpen) {
-        $global:hideLogTimer = New-Object System.Windows.Threading.DispatcherTimer
-        $global:hideLogTimer.Interval = [TimeSpan]::FromMilliseconds(300)
-        $global:hideLogTimer.add_Tick({ $global:hideLogTimer.Stop(); $LogsCanvas.Visibility = "Hidden" }.GetNewClosure())
-        $global:hideLogTimer.Start()
+    if (-not $App.State.isLogsOpen) {
+        $App.Runtime.hideLogTimer = New-Object System.Windows.Threading.DispatcherTimer
+        $App.Runtime.hideLogTimer.Interval = [TimeSpan]::FromMilliseconds(300)
+        $App.Runtime.hideLogTimer.add_Tick({ $App.Runtime.hideLogTimer.Stop(); $App.UI.LogsCanvas.Visibility = "Hidden" }.GetNewClosure())
+        $App.Runtime.hideLogTimer.Start()
     }
 }
 
-# LIVE LOGS PARSER ENGINE
+#  LIVE LOGS TIMER
 $logTimer = New-Object System.Windows.Threading.DispatcherTimer
 $logTimer.Interval = [TimeSpan]::FromMilliseconds(1000)
 $logTimer.add_Tick({
     try {
-        if (-not $global:isLogsOpen -or $null -eq $comboCount.SelectedItem) { return }
-        $selCount = [int]($comboCount.SelectedItem.Tag)
-        if (-not $global:isEngineRunning) {
+        if (-not $App.State.isLogsOpen -or $null -eq $App.UI.comboCount.SelectedItem) { return }
+        $selCount = [int]($App.UI.comboCount.SelectedItem.Tag)
+        if (-not $App.State.isEngineRunning) {
             for ($i = 1; $i -le 8; $i++) {
-                $lbl = $form.FindName("lblTor$i")
+                $lbl = $App.UI.form.FindName("lblTor$i")
                 if ($null -ne $lbl) {
-                    $padded = $i.ToString().PadLeft(2, '0')
-                    if ($i -le $selCount) { $lbl.Text = "Tor $padded`: Offline"; $lbl.Foreground = "#4A5568" }
-                    else                  { $lbl.Text = "Tor $padded`: Disabled"; $lbl.Foreground = "#4A5568" }
+                    $padded = $i.ToString().PadLeft(2,'0')
+                    if ($i -le $selCount) { $lbl.Text = "Tor $padded`: Offline";   $lbl.Foreground = $_bc.ConvertFromString("#4A5568") }
+                    else                  { $lbl.Text = "Tor $padded`: Disabled";  $lbl.Foreground = $_bc.ConvertFromString("#4A5568") }
                 }
             }
-            if ($null -ne $txtXrayLogs) { $txtXrayLogs.Text = "" }
+            if ($null -ne $App.UI.txtXrayLogs) { $App.UI.txtXrayLogs.Text = "" }
             return
         }
         for ($i = 1; $i -le 8; $i++) {
-            $lbl = $form.FindName("lblTor$i")
+            $lbl = $App.UI.form.FindName("lblTor$i")
             if ($null -eq $lbl) { continue }
-            $padded = $i.ToString().PadLeft(2, '0')
-            if ($i -gt $selCount) { $lbl.Text = "Tor $padded`: Disabled"; $lbl.Foreground = "#4A5568"; continue }
+            $padded = $i.ToString().PadLeft(2,'0')
+            if ($i -gt $selCount) { $lbl.Text = "Tor $padded`: Disabled"; $lbl.Foreground = $_bc.ConvertFromString("#4A5568"); continue }
             $logPath = Get-AppPath "Data\Tors\Tor$i\tor.log"
             if (Test-Path $logPath) {
                 try {
                     $fs = New-Object System.IO.FileStream($logPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
                     $sr = New-Object System.IO.StreamReader($fs)
-                    $content = $sr.ReadToEnd()
-                    $sr.Close(); $fs.Close()
-                    $pctMatches = [regex]::Matches($content, 'Bootstrapped (\d+)%')
-                    if ($pctMatches.Count -gt 0) {
-                        $pct = $pctMatches[$pctMatches.Count - 1].Groups[1].Value
-                        $lbl.Text = "Tor $padded`: $pct%"
-                        $lbl.Foreground = if ($pct -eq "100") { "#68D391" } else { "#F6AD55" }
-                    } else { $lbl.Text = "Tor $padded`: Booting..."; $lbl.Foreground = "#A0AEC0" }
+                    $content = $sr.ReadToEnd(); $sr.Close(); $fs.Close()
+                    $pm = [regex]::Matches($content, 'Bootstrapped (\d+)%')
+                    if ($pm.Count -gt 0) {
+                        $pct = $pm[$pm.Count-1].Groups[1].Value
+                        $lbl.Text       = "Tor $padded`: $pct%"
+                        $lbl.Foreground = if ($pct -eq "100") { $App.UI.brGreen } else { $_bc.ConvertFromString("#F6AD55") }
+                    } else { $lbl.Text = "Tor $padded`: Booting..."; $lbl.Foreground = $App.UI.brGray }
                 } catch {}
-            } else { $lbl.Text = "Tor $padded`: Waiting..."; $lbl.Foreground = "#A0AEC0" }
+            } else { $lbl.Text = "Tor $padded`: Waiting..."; $lbl.Foreground = $App.UI.brGray }
         }
-        $xrayLogPath = Get-AppPath "Data\Xray\access.log"
-        if (Test-Path $xrayLogPath) {
+        $xrayLog = Get-AppPath "Data\Xray\access.log"
+        if (Test-Path $xrayLog) {
             try {
-                $fs = New-Object System.IO.FileStream($xrayLogPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+                $fs = New-Object System.IO.FileStream($xrayLog, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
                 $sr = New-Object System.IO.StreamReader($fs)
-                $content = $sr.ReadToEnd()
-                $sr.Close(); $fs.Close()
-                $lines   = $content -split "`r?`n" | Where-Object { $_ -match "accepted" -or $_ -match "proxy" }
-                $tail    = $lines | Select-Object -Last 15
-                $cleaned = $tail | ForEach-Object { $_ -replace "^.*?\s\d{2}:\d{2}:\d{2}\s+(127\.0\.0\.1:\d+\s+)?", "" }
-                if ($null -ne $txtXrayLogs) {
-                    $txtXrayLogs.Text = $cleaned -join "`n"
-                    $txtXrayLogs.ScrollToEnd()
-                }
+                $content = $sr.ReadToEnd(); $sr.Close(); $fs.Close()
+                $lines   = $content -split "`r?`n" | Where-Object { $_ -match "accepted|proxy" }
+                $cleaned = ($lines | Select-Object -Last 15) | ForEach-Object { $_ -replace "^.*?\s\d{2}:\d{2}:\d{2}\s+(127\.0\.0\.1:\d+\s+)?","" }
+                if ($null -ne $App.UI.txtXrayLogs) { $App.UI.txtXrayLogs.Text = $cleaned -join "`n"; $App.UI.txtXrayLogs.ScrollToEnd() }
             } catch {}
         }
     } catch {}
@@ -2538,10 +2454,10 @@ $logClearTimer = New-Object System.Windows.Threading.DispatcherTimer
 $logClearTimer.Interval = [TimeSpan]::FromHours(2)
 $logClearTimer.add_Tick({
     try {
-        foreach ($logFile in @("Data\Xray\access.log", "Data\Xray\error.log")) {
-            $fullPath = Get-AppPath $logFile
-            if (Test-Path $fullPath) { 
-                $fs = New-Object System.IO.FileStream($fullPath, [System.IO.FileMode]::Truncate, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
+        foreach ($lf in @("Data\Xray\access.log","Data\Xray\error.log")) {
+            $fp = Get-AppPath $lf
+            if (Test-Path $fp) {
+                $fs = New-Object System.IO.FileStream($fp, [System.IO.FileMode]::Truncate, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
                 $fs.Close()
             }
         }
@@ -2552,201 +2468,221 @@ $logClearTimer.add_Tick({
 })
 $logClearTimer.Start()
 
-# EVENT BINDINGS
+#  SYSTEM TRAY
 if (Test-Path (Get-AppPath "icon.ico")) {
-    $global:sysTrayIcon = New-Object System.Windows.Forms.NotifyIcon
-    $global:sysTrayIcon.Icon    = New-Object System.Drawing.Icon((Get-AppPath "icon.ico"))
-    $global:sysTrayIcon.Text    = "Tor Multiplexer"
-    $global:sysTrayIcon.Visible = $true
-    $restoreAppAction = {
-        $form.Dispatcher.Invoke([System.Action]{
-            $form.ShowInTaskbar = $true
-            $form.WindowState   = [System.Windows.WindowState]::Normal
-            $form.Activate() | Out-Null
+    $App.Runtime.sysTrayIcon = New-Object System.Windows.Forms.NotifyIcon
+    $App.Runtime.sysTrayIcon.Icon    = New-Object System.Drawing.Icon((Get-AppPath "icon.ico"))
+    $App.Runtime.sysTrayIcon.Text    = "Tor Multiplexer"
+    $App.Runtime.sysTrayIcon.Visible = $true
+    $restoreAction = {
+        $App.UI.form.Dispatcher.Invoke([System.Action]{
+            $App.UI.form.ShowInTaskbar = $true
+            $App.UI.form.WindowState   = [System.Windows.WindowState]::Normal
+            $App.UI.form.Activate() | Out-Null
         })
     }
-    $global:sysTrayIcon.add_DoubleClick($restoreAppAction)
+    $App.Runtime.sysTrayIcon.add_DoubleClick($restoreAction)
     $trayMenu = New-Object System.Windows.Forms.ContextMenuStrip
-    $trayMenu.Items.Add("Show Window").add_Click($restoreAppAction)
-    $trayMenu.Items.Add("Exit Application").add_Click({ $form.Dispatcher.Invoke([System.Action]{ $form.Close() }) })
-    $global:sysTrayIcon.ContextMenuStrip = $trayMenu
+    $trayMenu.Items.Add("Show Window").add_Click($restoreAction)
+    $trayMenu.Items.Add("Exit Application").add_Click({ $App.UI.form.Dispatcher.Invoke([System.Action]{ $App.UI.form.Close() }) })
+    $App.Runtime.sysTrayIcon.ContextMenuStrip = $trayMenu
 }
-$form.add_StateChanged({
-    if ($form.WindowState -eq [System.Windows.WindowState]::Minimized) { $form.ShowInTaskbar = -not $global:minimizeToTray }
+
+$App.UI.form.add_StateChanged({
+    if ($App.UI.form.WindowState -eq [System.Windows.WindowState]::Minimized) {
+        $App.UI.form.ShowInTaskbar = -not $App.Config.minimizeToTray
+    }
 })
 
-# COMBO BOXES
-$comboBridge.add_SelectionChanged({
-    if ($global:ignoreComboChange) { return }
-    if ($comboBridge.SelectedItem.Tag -eq "Custom") { 
-        $global:ignoreComboChange = $true
-        if (-not (Show-CustomBridgeDialog)) { Set-ComboSelectedTag $comboBridge $global:previousBridge } 
-        else { $global:previousBridge = "Custom" } 
-        $global:ignoreComboChange = $false
-    } else { $global:previousBridge = $comboBridge.SelectedItem.Tag }
+#  COMBO EVENTS
+$App.UI.comboBridge.add_SelectionChanged({
+    if ($App.State.ignoreComboChange) { return }
+    if ($App.UI.comboBridge.SelectedItem.Tag -eq "Custom") {
+        $App.State.ignoreComboChange = $true
+        if (-not (Show-CustomBridgeDialog)) { Set-ComboSelectedTag $App.UI.comboBridge $App.State.previousBridge }
+        else { $App.State.previousBridge = "Custom" }
+        $App.State.ignoreComboChange = $false
+    } else { $App.State.previousBridge = $App.UI.comboBridge.SelectedItem.Tag }
     Save-Config
 })
-$comboConfig.add_SelectionChanged({ 
-    if ($global:ignoreComboChange) { return }
-    if ($comboConfig.SelectedItem.Tag -eq "Custom") { 
-        $global:ignoreComboChange = $true
-        if (-not (Show-ExitNodeDialog)) { Set-ComboSelectedTag $comboConfig $global:previousConfig } 
-        else { $global:previousConfig = "Custom" } 
-        $global:ignoreComboChange = $false
-    } else { $global:previousConfig = $comboConfig.SelectedItem.Tag }
-    Save-Config 
+
+$App.UI.comboConfig.add_SelectionChanged({
+    if ($App.State.ignoreComboChange) { return }
+    if ($App.UI.comboConfig.SelectedItem.Tag -eq "Custom") {
+        $App.State.ignoreComboChange = $true
+        if (-not (Show-ExitNodeDialog)) { Set-ComboSelectedTag $App.UI.comboConfig $App.State.previousConfig }
+        else { $App.State.previousConfig = "Custom" }
+        $App.State.ignoreComboChange = $false
+    } else { $App.State.previousConfig = $App.UI.comboConfig.SelectedItem.Tag }
+    Save-Config
 })
-$comboCount.add_SelectionChanged({ Save-Config })
 
-# BUTTON ACTIONS
-$btnStatsPanel.add_Click({ if ($global:isConnected) { Start-GeoPing } })
-$btnAction.add_Click({ if ($global:isConnected -or $btnActionMainText.Text -eq "CONNECTING") { Stop-AllEngines } else { Start-Engines } })
+$App.UI.comboCount.add_SelectionChanged({ Save-Config })
 
-if ($null -ne $btnAutoStartMain) {
-    $btnAutoStartMain.Add_Click({
-        $script:autoStart = -not $script:autoStart
-        Set-AutoConnectState $script:autoStart $true
-        Save-Config
-    })
-}
-if ($null -ne $btnAdvMain) {
-    $btnAdvMain.Add_Click({
-        $global:isAdvancedOpen = -not $global:isAdvancedOpen
-        Set-AdvState $global:isAdvancedOpen
-        Update-WindowSize
-    })
-}
-$btnDesktop.Add_Click({
+#  BUTTON EVENTS
+$App.UI.btnStatsPanel.add_Click({ if ($App.State.isConnected) { Start-GeoPing } })
+$App.UI.btnAction.add_Click({
+    if ($App.State.isConnected -or $App.UI.btnActionMainText.Text -eq "CONNECTING") { Stop-AllEngines } else { Start-Engines }
+})
+$App.UI.btnAutoStartMain.Add_Click({
+    $App.Config.autoStart = -not $App.Config.autoStart
+    Set-AutoConnectState $App.Config.autoStart $true
+    Save-Config
+})
+$App.UI.btnAdvMain.Add_Click({
+    $App.State.isAdvancedOpen = -not $App.State.isAdvancedOpen
+    Set-AdvState $App.State.isAdvancedOpen
+    Update-WindowSize
+})
+$App.UI.btnDesktop.Add_Click({
     try {
-        $WshShell  = New-Object -ComObject WScript.Shell
-        $Shortcut  = $WshShell.CreateShortcut("$([Environment]::GetFolderPath('Desktop'))\TorMultiplexer.lnk")
-        $Shortcut.TargetPath      = Get-AppPath "Launch Multiplexer.exe"
-        $Shortcut.WorkingDirectory = $global:baseDir
-        $Shortcut.Save()
+        $ws = New-Object -ComObject WScript.Shell
+        $sc = $ws.CreateShortcut("$([Environment]::GetFolderPath('Desktop'))\TorMultiplexer.lnk")
+        $sc.TargetPath = Get-AppPath "Launch Multiplexer.exe"; $sc.WorkingDirectory = $App.Config.baseDir; $sc.Save()
         [System.Windows.Forms.MessageBox]::Show("Desktop shortcut created successfully!", "Success")
-    } catch { 
-        [System.Windows.Forms.MessageBox]::Show("Failed to create Desktop shortcut: $($_.Exception.Message)", "Error") 
+    } catch { [System.Windows.Forms.MessageBox]::Show("Failed: $($_.Exception.Message)", "Error") }
+})
+$App.UI.btnCloseLogs.add_Click({
+    if ($App.State.isLogsOpen) {
+        $App.State.isLogsOpen = $false
+        Set-WpfToggleState $App.UI.btnLogsTog $false "HIDE" "SHOW"
+        Update-WindowSize; Save-Config
     }
 })
-$btnCloseLogs.add_Click({
-    if ($global:isLogsOpen) {
-        $global:isLogsOpen = $false
-        Set-WpfToggleState $btnLogsTog $global:isLogsOpen "HIDE" "SHOW"
-        Update-WindowSize
-        Save-Config
-    }
-})
-$toggleAction = {
+
+$toggleModeAction = {
     param($mode)
-    if ($global:lastXrayMode -ne $mode) {
-        $global:lastXrayMode = $mode
+    if ($App.Config.lastXrayMode -ne $mode) {
+        $App.Config.lastXrayMode = $mode
         Update-RoutingToggle; Save-Config
-        if ($global:isConnected) { Restart-Xray $mode }
+        if ($App.State.isConnected) { Restart-Xray $mode }
     }
 }
-$btnProxyMode.add_Click({ & $toggleAction "Proxy Mode"  })
-$btnClearProxy.add_Click({ & $toggleAction "Clear Proxy" })
-$btnVpnMode.add_Click({ & $toggleAction "VPN Mode"   })
+$App.UI.btnProxyMode.add_Click({ & $toggleModeAction "Proxy Mode"  })
+$App.UI.btnClearProxy.add_Click({ & $toggleModeAction "Clear Proxy" })
+$App.UI.btnVpnMode.add_Click({ & $toggleModeAction "VPN Mode"    })
 
-$btnV2rayTog.Add_Click({
-    if (-not $global:enableV2rayChain -and [string]::IsNullOrWhiteSpace($global:v2rayChainJson)) {
+$App.UI.btnV2rayTog.Add_Click({
+    if (-not $App.Config.enableV2rayChain -and [string]::IsNullOrWhiteSpace($App.Config.v2rayChainJson)) {
         if (-not (Show-V2rayDialog)) { return }
     }
-    $global:enableV2rayChain = -not $global:enableV2rayChain
-    Set-WpfToggleState $btnV2rayTog $global:enableV2rayChain
+    $App.Config.enableV2rayChain = -not $App.Config.enableV2rayChain
+    Set-WpfToggleState $App.UI.btnV2rayTog $App.Config.enableV2rayChain
     Save-Config
-    if ($global:isConnected) { Restart-Xray $global:lastXrayMode }
+    if ($App.State.isConnected) { Restart-Xray $App.Config.lastXrayMode }
 })
-$btnV2rayLbl.Add_Click({
-    Show-V2rayDialog | Out-Null
-    Set-WpfToggleState $btnV2rayTog $global:enableV2rayChain
-})
-$btnDirectTog.Add_Click({
-    $newState = -not $global:enableDirect
-    if ($newState) {
-        $hasRules = -not [string]::IsNullOrWhiteSpace($global:lastManualSplit) -or -not [string]::IsNullOrWhiteSpace($global:lastAppSplit)
-        if (-not $hasRules) { if (-not (Show-DirectRulesDialog)) { return } }
+$App.UI.btnV2rayLbl.Add_Click({ Show-V2rayDialog | Out-Null; Set-WpfToggleState $App.UI.btnV2rayTog $App.Config.enableV2rayChain })
+
+$App.UI.btnDirectTog.Add_Click({
+    $newState = -not $App.Config.enableDirect
+    if ($newState -and -not ([string]::IsNullOrWhiteSpace($App.Config.lastManualSplit) -eq $false -or [string]::IsNullOrWhiteSpace($App.Config.lastAppSplit) -eq $false)) {
+        if (-not (Show-DirectRulesDialog)) { return }
     }
-    $global:enableDirect = $newState
-    Set-WpfToggleState $btnDirectTog $global:enableDirect
+    $App.Config.enableDirect = $newState
+    Set-WpfToggleState $App.UI.btnDirectTog $App.Config.enableDirect
     Save-Config
-    if ($global:isConnected) { Restart-Xray $global:lastXrayMode }
+    if ($App.State.isConnected) { Restart-Xray $App.Config.lastXrayMode }
 })
-$btnDirectLbl.Add_Click({ Show-DirectRulesDialog | Out-Null })
-$btnOutboundTog.Add_Click({
-    if ($global:isConnected) { 
-        [System.Windows.Forms.MessageBox]::Show("Disconnect first.", "Action Denied", 0, 48); return 
-    }
-    $newState = -not $global:enableOutboundProxy
-    if ($newState -and [string]::IsNullOrWhiteSpace($global:outboundProxyAddress)) {
+$App.UI.btnDirectLbl.Add_Click({ Show-DirectRulesDialog | Out-Null })
+
+$App.UI.btnOutboundTog.Add_Click({
+    if ($App.State.isConnected) { [System.Windows.Forms.MessageBox]::Show("Disconnect first.", "Action Denied", 0, 48); return }
+    $newState = -not $App.Config.enableOutboundProxy
+    if ($newState -and [string]::IsNullOrWhiteSpace($App.Config.outboundProxyAddress)) {
         if (-not (Show-OutboundProxyDialog)) { return }
     }
-    $global:enableOutboundProxy = $newState
-    Set-WpfToggleState $btnOutboundTog $global:enableOutboundProxy
+    $App.Config.enableOutboundProxy = $newState
+    Set-WpfToggleState $App.UI.btnOutboundTog $App.Config.enableOutboundProxy
     Save-Config
 })
-$btnOutboundLbl.Add_Click({ 
-    Show-OutboundProxyDialog | Out-Null
-    Set-WpfToggleState $btnOutboundTog $global:enableOutboundProxy
-})
-$btnDohTog.Add_Click({
-    if ($global:isConnected) { [System.Windows.Forms.MessageBox]::Show("Disconnect first.", "Action Denied", 0, 48); return }
-    if ($global:enableTorDoh -or $global:enableUpstreamDoh) {
-        $global:enableTorDoh = $false; $global:enableUpstreamDoh = $false
-        Set-WpfToggleState $btnDohTog $false; Save-Config; Evaluate-ProxyExclusivity
+$App.UI.btnOutboundLbl.Add_Click({ Show-OutboundProxyDialog | Out-Null; Set-WpfToggleState $App.UI.btnOutboundTog $App.Config.enableOutboundProxy })
+
+$App.UI.btnDohTog.Add_Click({
+    if ($App.State.isConnected) { [System.Windows.Forms.MessageBox]::Show("Disconnect first.", "Action Denied", 0, 48); return }
+    if ($App.Config.enableTorDoh -or $App.Config.enableUpstreamDoh) {
+        $App.Config.enableTorDoh = $false; $App.Config.enableUpstreamDoh = $false
+        Set-WpfToggleState $App.UI.btnDohTog $false; Save-Config; Evaluate-ProxyExclusivity
     } else {
-        if (-not (Show-DohDialog)) { Set-WpfToggleState $btnDohTog $false } 
-        else { Set-WpfToggleState $btnDohTog ($global:enableTorDoh -or $global:enableUpstreamDoh); Save-Config; Evaluate-ProxyExclusivity }
+        if (-not (Show-DohDialog)) { Set-WpfToggleState $App.UI.btnDohTog $false }
+        else { Set-WpfToggleState $App.UI.btnDohTog ($App.Config.enableTorDoh -or $App.Config.enableUpstreamDoh); Save-Config; Evaluate-ProxyExclusivity }
     }
 })
-$btnDohLbl.Add_Click({ $btnDohTog.RaiseEvent((New-Object System.Windows.RoutedEventArgs([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent))) })
+$App.UI.btnDohLbl.Add_Click({ $App.UI.btnDohTog.RaiseEvent((New-Object System.Windows.RoutedEventArgs([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent))) })
 
-# SIMPLE TOGGLE BINDINGS
-$btnBootTog.Add_Click({    $script:launchOnBoot = -not $script:launchOnBoot; Set-WpfToggleState $btnBootTog $script:launchOnBoot; Update-BootShortcut; Save-Config })
-$btnDebugTog.Add_Click({   $script:debugMode    = -not $script:debugMode;    Set-WpfToggleState $btnDebugTog $script:debugMode })
-$btnTrayTog.Add_Click({    $global:minimizeToTray = -not $global:minimizeToTray; Set-WpfToggleState $btnTrayTog $global:minimizeToTray; Save-Config })
-$btnLogsTog.Add_Click({    $global:isLogsOpen   = -not $global:isLogsOpen;   Set-WpfToggleState $btnLogsTog $global:isLogsOpen "HIDE" "SHOW"; Update-WindowSize; Save-Config })
-$btnAdBlockTog.Add_Click({ $global:enableAdBlock = -not $global:enableAdBlock; Set-WpfToggleState $btnAdBlockTog $global:enableAdBlock; Save-Config; if ($global:isConnected) { Restart-Xray $global:lastXrayMode } })
-$btnBootLbl.Add_Click({    $btnBootTog.RaiseEvent(    (New-Object System.Windows.RoutedEventArgs([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent))) })
-$btnDebugLbl.Add_Click({   $btnDebugTog.RaiseEvent(   (New-Object System.Windows.RoutedEventArgs([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent))) })
-$btnTrayLbl.Add_Click({    $btnTrayTog.RaiseEvent(    (New-Object System.Windows.RoutedEventArgs([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent))) })
-$btnLogsLbl.Add_Click({    $btnLogsTog.RaiseEvent(    (New-Object System.Windows.RoutedEventArgs([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent))) })
-$btnAdBlockLbl.Add_Click({ $btnAdBlockTog.RaiseEvent( (New-Object System.Windows.RoutedEventArgs([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent))) })
+# Simple toggles
+$App.UI.btnBootTog.Add_Click({
+    $App.Config.launchOnBoot = -not $App.Config.launchOnBoot
+    Set-WpfToggleState $App.UI.btnBootTog $App.Config.launchOnBoot; Update-BootShortcut; Save-Config
+})
+$App.UI.btnDebugTog.Add_Click({
+    $App.Config.debugMode = -not $App.Config.debugMode
+    Set-WpfToggleState $App.UI.btnDebugTog $App.Config.debugMode
+})
+$App.UI.btnTrayTog.Add_Click({
+    $App.Config.minimizeToTray = -not $App.Config.minimizeToTray
+    Set-WpfToggleState $App.UI.btnTrayTog $App.Config.minimizeToTray; Save-Config
+})
+$App.UI.btnLogsTog.Add_Click({
+    $App.State.isLogsOpen = -not $App.State.isLogsOpen
+    Set-WpfToggleState $App.UI.btnLogsTog $App.State.isLogsOpen "HIDE" "SHOW"; Update-WindowSize; Save-Config
+})
+$App.UI.btnAdBlockTog.Add_Click({
+    $App.Config.enableAdBlock = -not $App.Config.enableAdBlock
+    Set-WpfToggleState $App.UI.btnAdBlockTog $App.Config.enableAdBlock; Save-Config
+    if ($App.State.isConnected) { Restart-Xray $App.Config.lastXrayMode }
+})
 
-# EXIT & AUTO-BOOT TRIGGERS
-$form.add_Closing({ 
-    $statsTimer.Stop()
+# Label → toggle relay
+$App.UI.btnBootLbl.Add_Click({    $App.UI.btnBootTog.RaiseEvent((New-Object System.Windows.RoutedEventArgs([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent))) })
+$App.UI.btnDebugLbl.Add_Click({   $App.UI.btnDebugTog.RaiseEvent((New-Object System.Windows.RoutedEventArgs([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent))) })
+$App.UI.btnTrayLbl.Add_Click({    $App.UI.btnTrayTog.RaiseEvent((New-Object System.Windows.RoutedEventArgs([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent))) })
+$App.UI.btnLogsLbl.Add_Click({    $App.UI.btnLogsTog.RaiseEvent((New-Object System.Windows.RoutedEventArgs([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent))) })
+$App.UI.btnAdBlockLbl.Add_Click({ $App.UI.btnAdBlockTog.RaiseEvent((New-Object System.Windows.RoutedEventArgs([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent))) })
+
+#  WINDOW CLOSE / CONTENT RENDERED
+$App.UI.form.add_Closing({
+    $App.Runtime.statsTimer.Stop()
     $logTimer.Stop()
     $logClearTimer.Stop()
-    if ($null -ne $global:wavePhysicsTimer) { $global:wavePhysicsTimer.Stop() }
-    if ($null -ne $global:hideAdvTimer)     { $global:hideAdvTimer.Stop() }
-    if ($null -ne $global:hideLogTimer)     { $global:hideLogTimer.Stop() }
-    if ($null -ne $global:pingTimer)        { $global:pingTimer.Stop() }
-    Stop-AllEngines $true 
-    if ($global:sysTrayIcon) { $global:sysTrayIcon.Visible = $false; $global:sysTrayIcon.Dispose() }
-})
-$form.add_Closed({ [Environment]::Exit(0) })
-
-$form.add_ContentRendered({ 
+    if ($null -ne $App.Runtime.wavePhysicsTimer) { $App.Runtime.wavePhysicsTimer.Stop() }
+    if ($null -ne $App.Runtime.waveHoldTimer)    { $App.Runtime.waveHoldTimer.Stop() }
+    if ($null -ne $App.Runtime.hideAdvTimer)     { $App.Runtime.hideAdvTimer.Stop() }
+    if ($null -ne $App.Runtime.hideLogTimer)     { $App.Runtime.hideLogTimer.Stop() }
+    if ($null -ne $App.Runtime.pingTimer)        { $App.Runtime.pingTimer.Stop() }
+    
     try {
-        if ($global:appInitialized) { return }
-        $global:appInitialized = $true
-        Check-UpdateSilent
-
-        if ($script:autoStart) {
-            $animTimer = New-Object System.Windows.Threading.DispatcherTimer
-            $animTimer.Interval = [TimeSpan]::FromMilliseconds(150)
-            $animTimer.add_Tick({
-                $animTimer.Stop()
-                Set-AutoConnectState $true $true
-            }.GetNewClosure())
-            $animTimer.Start()
+        if ($null -ne $App.Runtime.statsWebClient) {
+            $App.Runtime.statsWebClient.CancelAsync()
+            $App.Runtime.statsWebClient.Dispose()
+            $App.Runtime.statsWebClient = $null
         }
+    } catch {}
+    
+    Stop-AllEngines $true
+    if ($null -ne $App.Runtime.sysTrayIcon) {
+        $App.Runtime.sysTrayIcon.Visible = $false
+        $App.Runtime.sysTrayIcon.Dispose()
+    }
+})
 
-        # MISSING CORE COMPONENT CHECK
+$App.UI.form.add_Closed({ [Environment]::Exit(0) })
+
+$App.UI.form.add_ContentRendered({
+    try {
+        if ($App.State.appInitialized) { return }
+        $App.State.appInitialized = $true
+        Check-UpdateSilent
+        if ($App.Config.autoStart) {
+            $animT = New-Object System.Windows.Threading.DispatcherTimer
+            $animT.Interval = [TimeSpan]::FromMilliseconds(150)
+            $animT.add_Tick({ $animT.Stop(); Set-AutoConnectState $true $true }.GetNewClosure())
+            $animT.Start()
+        }
+        
+        # Missing launcher check
         if (-not (Test-Path (Get-AppPath "Launch Multiplexer.exe"))) {
             $ix = @"
-                <TextBlock Text="Your installation is missing 'Launch Multiplexer.exe'.&#x0a;&#x0a;This usually happens if you updated the script but didn't download the full package. Please download the latest full release from GitHub." Canvas.Left="15" Canvas.Top="35" Width="350" TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource TextMain}"/>
+                <TextBlock Text="Your installation is missing 'Launch Multiplexer.exe'.&#x0a;&#x0a;Please download the latest full release from GitHub." Canvas.Left="15" Canvas.Top="35" Width="350" TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource TextMain}"/>
                 <Button Name="btnGit" Content="Open GitHub" Canvas.Left="15" Canvas.Top="132" Width="130" Height="25" Style="{StaticResource SaveButton}"/>
                 <Button Name="btnCancel" Content="Close" Canvas.Left="275" Canvas.Top="132" Width="90" Height="25" IsCancel="True"/>
 "@
@@ -2756,16 +2692,15 @@ $form.add_ContentRendered({
             }
             Show-AppDialog -Title "MISSING CORE COMPONENT" -Width 420 -Height 240 -InnerXaml $ix -OnLoad $onLoad | Out-Null
         }
-
-        # AUTO-START LOGIC
-        if ($script:autoStart -and -not $isFirstLaunch) { 
-            $bootTimer = New-Object System.Windows.Threading.DispatcherTimer
-            $bootTimer.Interval = [TimeSpan]::FromMilliseconds(500)
-            $bootTimer.add_Tick({
-                $bootTimer.Stop()
-                if (-not $global:abortBoot) { Start-Engines }
+        
+        if ($App.Config.autoStart -and -not $App.State.isFirstLaunch) {
+            $bootT = New-Object System.Windows.Threading.DispatcherTimer
+            $bootT.Interval = [TimeSpan]::FromMilliseconds(500)
+            $bootT.add_Tick({
+                $bootT.Stop()
+                if (-not $App.State.abortBoot) { Start-Engines }
             }.GetNewClosure())
-            $bootTimer.Start()
+            $bootT.Start()
         }
     } catch {
         $msg = "Error: $($_.Exception.Message)`nStack: $($_.ScriptStackTrace)"
@@ -2774,14 +2709,11 @@ $form.add_ContentRendered({
     }
 })
 
+#  LAUNCH
 Update-WaveAnimation -State "Idle"
-
-if ($null -ne $form) {
-    try {
-        $form.ShowDialog() | Out-Null
-    } catch {
-        [System.Windows.Forms.MessageBox]::Show("Final ShowDialog failed: $($_.Exception.Message)")
-    }
+if ($null -ne $App.UI.form) {
+    try { $App.UI.form.ShowDialog() | Out-Null }
+    catch { [System.Windows.Forms.MessageBox]::Show("ShowDialog failed: $($_.Exception.Message)") }
 } else {
-    [System.Windows.Forms.MessageBox]::Show("Main Form is NULL. XAML parsing failed earlier.")
+    [System.Windows.Forms.MessageBox]::Show("Main Form is NULL — XAML parse failed.")
 }
