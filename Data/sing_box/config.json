@@ -1,0 +1,91 @@
+{
+    "dns":  {
+                "servers":  [
+                                {
+                                    "detour":  "proxy",
+                                    "path":  "/dns-query",
+                                    "server":  "cloudflare-dns.com",
+                                    "type":  "https",
+                                    "tag":  "dns_proxy"
+                                }
+                            ],
+                "final":  "dns_proxy",
+                "strategy":  "ipv4_only"
+            },
+    "outbounds":  [
+                      {
+                          "server":  "127.0.0.1",
+                          "tag":  "proxy",
+                          "type":  "socks",
+                          "server_port":  10818
+                      },
+                      {
+                          "tag":  "direct",
+                          "type":  "direct"
+                      },
+                      {
+                          "tag":  "block",
+                          "type":  "block"
+                      }
+                  ],
+    "inbounds":  [
+                     {
+                         "strict_route":  true,
+                         "type":  "tun",
+                         "mtu":  9000,
+                         "interface_name":  "singbox_tun",
+                         "stack":  "gvisor",
+                         "auto_route":  true,
+                         "tag":  "tun-in",
+                         "address":  [
+                                         "172.18.0.1/30"
+                                     ]
+                     }
+                 ],
+    "log":  {
+                "level":  "fatal"
+            },
+    "route":  {
+                  "auto_detect_interface":  true,
+                  "final":  "proxy",
+                  "rules":  [
+                                {
+                                    "outbound":  "direct",
+                                    "process_name":  [
+                                                         "tor.exe",
+                                                         "haproxy.exe",
+                                                         "lyrebird.exe",
+                                                         "obfs4proxy.exe",
+                                                         "snowflake-client.exe",
+                                                         "xray.exe",
+                                                         "sing-box.exe",
+                                                         "chrome.exe"
+                                                     ]
+                                },
+                                {
+                                    "action":  "sniff"
+                                },
+                                {
+                                    "action":  "hijack-dns",
+                                    "port":  [
+                                                 53
+                                             ]
+                                },
+                                {
+                                    "protocol":  "dns",
+                                    "action":  "hijack-dns"
+                                },
+                                {
+                                    "ip_is_private":  true,
+                                    "outbound":  "direct"
+                                },
+                                {
+                                    "port":  [
+                                                 443
+                                             ],
+                                    "outbound":  "block",
+                                    "network":  "udp"
+                                }
+                            ]
+              }
+}
