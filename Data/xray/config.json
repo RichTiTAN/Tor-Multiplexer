@@ -11,6 +11,11 @@
                                              ],
                                       "outboundTag":  "direct",
                                       "type":  "field"
+                                  },
+                                  {
+                                      "network":  "tcp,udp",
+                                      "outboundTag":  "proxy",
+                                      "type":  "field"
                                   }
                               ],
                     "domainStrategy":  "AsIs"
@@ -40,13 +45,24 @@
                      {
                          "port":  10818,
                          "protocol":  "mixed",
+                         "sniffing":  {
+                                          "destOverride":  [
+                                                               "http",
+                                                               "tls",
+                                                               "quic",
+                                                               "fakedns"
+                                                           ],
+                                          "enabled":  true
+                                      },
                          "settings":  {
                                           "udp":  true
                                       },
-                         "listen":  "127.0.0.1"
+                         "listen":  "0.0.0.0"
                      }
                  ],
     "log":  {
-                "logLevel":  "warning"
+                "error":  "error.log",
+                "logLevel":  "info",
+                "access":  "access.log"
             }
 }
