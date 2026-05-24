@@ -34,7 +34,7 @@
 
 3- گزینه Proxy mode پروکسی سیستم شما را فعال میکند و میتوانید در هر اپلیکیشنی از آن استفاده کنید. گزینه Clear proxy به شما پورت داخلی برای استفاده در اپلیکیشن پروکسی شخصی شما میدهد. 
 
-Made with love by [@itsTiTANVPN](https://t.me/itsTitanVPN) 
+Made with love by [@itsTiTANVPN](https://t.me/itsTitanVPN) and my AI friends 
 
 
 
