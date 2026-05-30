@@ -1,0 +1,7 @@
+        <TextBlock Name="lblUp" Text="Upstream DoH (Xray / Sing-box):" Canvas.Left="15" Canvas.Top="35" FontSize="11" Foreground="{StaticResource TextMuted}"/>
+        <Border Name="borUp" Canvas.Left="15" Canvas.Top="55" Width="357" Height="30" Background="{StaticResource BgInput}" BorderBrush="{StaticResource BorderMain}" BorderThickness="1" CornerRadius="4">
+            <TextBox Name="txtUpDoh" Margin="6,2,6,2" Background="Transparent" Foreground="{StaticResource TextGreen}" CaretBrush="White" BorderThickness="0" Padding="5,0,4,0" FontSize="12" FontFamily="Consolas" VerticalContentAlignment="Center"/>
+        </Border>
+        <TextBlock Name="lblHint" Canvas.Left="15" Canvas.Top="100" Width="350" TextWrapping="Wrap" FontSize="11" Foreground="#4A5568" Text="Hint: Enter a full DoH URL or a standard IPv4 DNS.&#x0a;(e.g., https://1.1.1.1/dns-query OR 10.202.10.10)"/>
+        <Button Name="btnOk" Content="Save" Canvas.Left="175" Canvas.Top="145" Width="90" Height="25" IsDefault="True" Style="{StaticResource SaveButton}"/>
+        <Button Name="btnCancel" Content="Cancel" Canvas.Left="275" Canvas.Top="145" Width="90" Height="25" IsCancel="True"/>

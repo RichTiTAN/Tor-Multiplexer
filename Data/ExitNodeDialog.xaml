@@ -1,0 +1,4 @@
+        <TextBlock Text="Select your desired geographic exit location:" Canvas.Left="15" Canvas.Top="35" FontSize="11" Foreground="{StaticResource TextMain}"/>
+        <ComboBox Name="cmbCountries" Canvas.Left="15" Canvas.Top="57" Width="350" Height="28" FontSize="11" FontFamily="Consolas" Style="{StaticResource DarkComboBox}"/>
+        <Button Name="btnOk" Content="Save" Canvas.Left="175" Canvas.Top="102" Width="90" Height="25" IsDefault="True" Style="{StaticResource SaveButton}"/>
+        <Button Name="btnCancel" Content="Cancel" Canvas.Left="275" Canvas.Top="102" Width="90" Height="25" IsCancel="True"/>

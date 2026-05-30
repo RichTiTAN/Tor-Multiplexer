@@ -1,0 +1,26 @@
+        <Border BorderBrush="{StaticResource BorderLight}" BorderThickness="1" CornerRadius="4,0,0,4" Canvas.Left="15" Canvas.Top="35" Width="120" Height="26">
+            <TextBlock Text="PROXY TYPE" FontSize="10" FontWeight="Bold" Foreground="{StaticResource TextMuted}" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-1,0,0"/>
+        </Border>
+        <Rectangle Canvas.Left="134" Canvas.Top="35" Width="1" Height="26" Fill="{StaticResource BorderLight}"/>
+        <ComboBox Name="cmbProxyType" Canvas.Left="135" Canvas.Top="35" Width="120" Height="26" FontSize="11" Style="{StaticResource DarkComboBoxJoined}">
+            <ComboBoxItem Content="SOCKS5"/><ComboBoxItem Content="HTTPS"/>
+        </ComboBox>
+        <TextBlock Text="Address/IP:" Canvas.Left="15" Canvas.Top="70" FontSize="11" Foreground="{StaticResource TextMuted}"/>
+        <TextBox Name="txtAddr" Canvas.Left="15" Canvas.Top="88" Width="240" Height="26" Background="{StaticResource BgInput}" Foreground="{StaticResource TextGreen}" BorderBrush="{StaticResource BorderMain}" BorderThickness="1" Padding="4" FontSize="12" FontFamily="Consolas" VerticalContentAlignment="Center"/>
+        <TextBlock Text="Port:" Canvas.Left="270" Canvas.Top="70" FontSize="11" Foreground="{StaticResource TextMuted}"/>
+        <TextBox Name="txtPort" Canvas.Left="270" Canvas.Top="88" Width="95" Height="26" Background="{StaticResource BgInput}" Foreground="{StaticResource TextGreen}" BorderBrush="{StaticResource BorderMain}" BorderThickness="1" Padding="4" FontSize="12" FontFamily="Consolas" VerticalContentAlignment="Center"/>
+        <Border BorderBrush="{StaticResource BorderLight}" BorderThickness="1" CornerRadius="4,0,0,4" Canvas.Left="15" Canvas.Top="128" Width="120" Height="26">
+            <TextBlock Text="AUTHENTICATION" FontSize="10" FontWeight="Bold" Foreground="{StaticResource TextMuted}" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-1,0,0"/>
+        </Border>
+        <Rectangle Canvas.Left="134" Canvas.Top="128" Width="1" Height="26" Fill="{StaticResource BorderLight}"/>
+        <ComboBox Name="cmbAuth" Canvas.Left="135" Canvas.Top="128" Width="120" Height="26" FontSize="11" Style="{StaticResource DarkComboBoxJoined}">
+            <ComboBoxItem Content="Disabled"/><ComboBoxItem Content="Enabled"/>
+        </ComboBox>
+        <Canvas Name="panAuth" Canvas.Left="15" Canvas.Top="165" Visibility="Hidden" Opacity="0">
+            <TextBlock Text="Username:" Canvas.Left="0" Canvas.Top="0" FontSize="11" Foreground="{StaticResource TextMuted}"/>
+            <TextBox Name="txtUser" Canvas.Left="0" Canvas.Top="18" Width="165" Height="26" Background="{StaticResource BgInput}" Foreground="{StaticResource TextGreen}" BorderBrush="{StaticResource BorderMain}" BorderThickness="1" Padding="4" FontSize="12" FontFamily="Consolas" VerticalContentAlignment="Center"/>
+            <TextBlock Text="Password:" Canvas.Left="185" Canvas.Top="0" FontSize="11" Foreground="{StaticResource TextMuted}"/>
+            <TextBox Name="txtPass" Canvas.Left="185" Canvas.Top="18" Width="165" Height="26" Background="{StaticResource BgInput}" Foreground="{StaticResource TextGreen}" BorderBrush="{StaticResource BorderMain}" BorderThickness="1" Padding="4" FontSize="12" FontFamily="Consolas" VerticalContentAlignment="Center"/>
+        </Canvas>
+        <Button Name="btnOk" Content="Save" Canvas.Left="175" Canvas.Top="168" Width="90" Height="25" IsDefault="True" Style="{StaticResource SaveButton}"/>
+        <Button Name="btnCancel" Content="Cancel" Canvas.Left="275" Canvas.Top="168" Width="90" Height="25" IsCancel="True"/>

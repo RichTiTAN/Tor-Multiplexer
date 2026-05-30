@@ -1,0 +1,5 @@
+        <TextBlock Text="Paste the full v2rayN JSON or raw Xray Outbound below:" Canvas.Left="15" Canvas.Top="35" FontSize="11" Foreground="{StaticResource TextMain}"/>
+        <TextBox Name="txtInput" Canvas.Left="15" Canvas.Top="60" Width="448" Height="180" Background="{StaticResource BgInput}" Foreground="{StaticResource TextGreen}" BorderBrush="{StaticResource BorderMain}" BorderThickness="1" TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" Padding="5" FontSize="11" FontFamily="Consolas"/>
+        <Button Name="btnImport" Content="Import .json File" Canvas.Left="15" Canvas.Top="257" Width="120" Height="25"/>
+        <Button Name="btnOk" Content="Validate &amp; Save" Canvas.Left="243" Canvas.Top="257" Width="110" Height="25" IsDefault="True" Style="{StaticResource SaveButton}"/>
+        <Button Name="btnCancel" Content="Cancel" Canvas.Left="363" Canvas.Top="257" Width="100" Height="25" IsCancel="True"/>

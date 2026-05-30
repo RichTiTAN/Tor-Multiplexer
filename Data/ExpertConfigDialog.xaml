@@ -1,0 +1,34 @@
+        <TextBlock Text="Hardware Accel:" Canvas.Left="15" Canvas.Top="35" FontSize="11" Foreground="{StaticResource TextMuted}"/>
+        <ComboBox Name="cmbHW" Canvas.Left="15" Canvas.Top="53" Width="140" Height="26" FontSize="11" Style="{StaticResource DarkComboBox}">
+            <ComboBoxItem Content="Disabled"/><ComboBoxItem Content="Enabled"/>
+        </ComboBox>
+        <TextBlock Text="Fascist Firewall:" Canvas.Left="175" Canvas.Top="35" FontSize="11" Foreground="{StaticResource TextMuted}"/>
+        <ComboBox Name="cmbFF" Canvas.Left="175" Canvas.Top="53" Width="140" Height="26" FontSize="11" Style="{StaticResource DarkComboBox}">
+            <ComboBoxItem Content="Disabled"/><ComboBoxItem Content="Enabled"/>
+        </ComboBox>
+        <TextBlock Text="Strict Nodes:" Canvas.Left="335" Canvas.Top="35" FontSize="11" Foreground="{StaticResource TextMuted}"/>
+        <ComboBox Name="cmbSN" Canvas.Left="335" Canvas.Top="53" Width="150" Height="26" FontSize="11" Style="{StaticResource DarkComboBox}">
+            <ComboBoxItem Content="Disabled"/><ComboBoxItem Content="Enabled"/>
+        </ComboBox>
+        <TextBlock Text="CircuitBuildTimeout:" Canvas.Left="15" Canvas.Top="90" FontSize="11" Foreground="{StaticResource TextMuted}"/>
+        <TextBox Name="txtCBT" Canvas.Left="15" Canvas.Top="108" Width="140" Height="26" Background="{StaticResource BgInput}" Foreground="{StaticResource TextGreen}" BorderBrush="{StaticResource BorderMain}" BorderThickness="1" Padding="4" FontSize="12" FontFamily="Consolas" VerticalContentAlignment="Center"/>
+        <TextBlock Text="KeepalivePeriod:" Canvas.Left="175" Canvas.Top="90" FontSize="11" Foreground="{StaticResource TextMuted}"/>
+        <TextBox Name="txtKP" Canvas.Left="175" Canvas.Top="108" Width="140" Height="26" Background="{StaticResource BgInput}" Foreground="{StaticResource TextGreen}" BorderBrush="{StaticResource BorderMain}" BorderThickness="1" Padding="4" FontSize="12" FontFamily="Consolas" VerticalContentAlignment="Center"/>
+        <TextBlock Text="NewCircuitPeriod:" Canvas.Left="335" Canvas.Top="90" FontSize="11" Foreground="{StaticResource TextMuted}"/>
+        <TextBox Name="txtNCP" Canvas.Left="335" Canvas.Top="108" Width="150" Height="26" Background="{StaticResource BgInput}" Foreground="{StaticResource TextGreen}" BorderBrush="{StaticResource BorderMain}" BorderThickness="1" Padding="4" FontSize="12" FontFamily="Consolas" VerticalContentAlignment="Center"/>
+        <TextBlock Text="MaxCircuitDirtiness:" Canvas.Left="15" Canvas.Top="145" FontSize="11" Foreground="{StaticResource TextMuted}"/>
+        <TextBox Name="txtMCD" Canvas.Left="15" Canvas.Top="163" Width="140" Height="26" Background="{StaticResource BgInput}" Foreground="{StaticResource TextGreen}" BorderBrush="{StaticResource BorderMain}" BorderThickness="1" Padding="4" FontSize="12" FontFamily="Consolas" VerticalContentAlignment="Center"/>
+        <TextBlock Text="NumEntryGuards:" Canvas.Left="175" Canvas.Top="145" FontSize="11" Foreground="{StaticResource TextMuted}"/>
+        <TextBox Name="txtNEG" Canvas.Left="175" Canvas.Top="163" Width="140" Height="26" Background="{StaticResource BgInput}" Foreground="{StaticResource TextGreen}" BorderBrush="{StaticResource BorderMain}" BorderThickness="1" Padding="4" FontSize="12" FontFamily="Consolas" VerticalContentAlignment="Center"/>
+        <TextBlock Text="EntryNodes (e.g., {us}):" Canvas.Left="15" Canvas.Top="200" FontSize="11" Foreground="{StaticResource TextMuted}"/>
+        <TextBox Name="txtEN" Canvas.Left="15" Canvas.Top="218" Width="225" Height="26" Background="{StaticResource BgInput}" Foreground="{StaticResource TextGreen}" BorderBrush="{StaticResource BorderMain}" BorderThickness="1" Padding="4" FontSize="12" FontFamily="Consolas" VerticalContentAlignment="Center"/>
+        <TextBlock Text="ExitNodes (e.g., {uk},{de}):" Canvas.Left="260" Canvas.Top="200" FontSize="11" Foreground="{StaticResource TextMuted}"/>
+        <TextBox Name="txtExit" Canvas.Left="260" Canvas.Top="218" Width="225" Height="26" Background="{StaticResource BgInput}" Foreground="{StaticResource TextGreen}" BorderBrush="{StaticResource BorderMain}" BorderThickness="1" Padding="4" FontSize="12" FontFamily="Consolas" VerticalContentAlignment="Center"/>
+        <TextBlock Text="ExcludeNodes:" Canvas.Left="15" Canvas.Top="255" FontSize="11" Foreground="{StaticResource TextMuted}"/>
+        <TextBox Name="txtExNodes" Canvas.Left="15" Canvas.Top="273" Width="225" Height="26" Background="{StaticResource BgInput}" Foreground="{StaticResource TextGreen}" BorderBrush="{StaticResource BorderMain}" BorderThickness="1" Padding="4" FontSize="12" FontFamily="Consolas" VerticalContentAlignment="Center"/>
+        <TextBlock Text="ExcludeExitNodes:" Canvas.Left="260" Canvas.Top="255" FontSize="11" Foreground="{StaticResource TextMuted}"/>
+        <TextBox Name="txtExExit" Canvas.Left="260" Canvas.Top="273" Width="225" Height="26" Background="{StaticResource BgInput}" Foreground="{StaticResource TextGreen}" BorderBrush="{StaticResource BorderMain}" BorderThickness="1" Padding="4" FontSize="12" FontFamily="Consolas" VerticalContentAlignment="Center"/>
+        <TextBlock Text="Custom Torrc Lines (Advanced - One per line):" Canvas.Left="15" Canvas.Top="310" FontSize="11" Foreground="{StaticResource TextMuted}"/>
+        <TextBox Name="txtRaw" Canvas.Left="15" Canvas.Top="328" Width="470" Height="80" Background="{StaticResource BgInput}" Foreground="{StaticResource TextGreen}" BorderBrush="{StaticResource BorderMain}" BorderThickness="1" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" Padding="4" FontSize="12" FontFamily="Consolas"/>
+        <Button Name="btnOk" Content="Save Config" Canvas.Left="265" Canvas.Top="430" Width="110" Height="25" IsDefault="True" Style="{StaticResource SaveButton}"/>
+        <Button Name="btnCancel" Content="Cancel" Canvas.Left="385" Canvas.Top="430" Width="100" Height="25" IsCancel="True"/>

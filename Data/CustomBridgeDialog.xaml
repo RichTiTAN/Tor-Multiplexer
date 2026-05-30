@@ -1,0 +1,3 @@
+        <TextBox Name="txtInput" Canvas.Left="15" Canvas.Top="35" Width="350" Height="80" Background="{StaticResource BgInput}" Foreground="{StaticResource TextGreen}" BorderBrush="{StaticResource BorderMain}" BorderThickness="1" TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" Padding="5" FontSize="11" FontFamily="Consolas"/>
+        <Button Name="btnOk" Content="Save" Canvas.Left="175" Canvas.Top="132" Width="90" Height="25" IsDefault="True" Style="{StaticResource SaveButton}"/>
+        <Button Name="btnCancel" Content="Cancel" Canvas.Left="275" Canvas.Top="132" Width="90" Height="25" IsCancel="True"/>
