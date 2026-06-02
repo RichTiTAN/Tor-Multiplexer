@@ -11,10 +11,26 @@ Add-Type -AssemblyName WindowsBase
     Disable-SystemProxy
 })
 
-#  LEGACY UPDATE STUBS
-$global:currentVersion       = "5.2.1"
-$global:forceManualUpdate    = $true
-$global:minAutoUpdateVersion = "5.2.0"
+# WINDOWS NATIVE DARK TITLE BAR API  
+if (-not ("DWM" -as [type])) {
+    try {
+        Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class DWM {
+    [DllImport("dwmapi.dll")]
+    public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+    public static void DarkTitleBar(IntPtr hwnd) {
+        try {
+            int useImmersiveDarkMode = 1;
+            DwmSetWindowAttribute(hwnd, 20, ref useImmersiveDarkMode, sizeof(int));
+            DwmSetWindowAttribute(hwnd, 19, ref useImmersiveDarkMode, sizeof(int));
+        } catch {}
+    }
+}
+"@
+    } catch {}
+}
 
 # SYSTEM PROXY REFRESH API
 if (-not ("Win32.WinInet" -as [type])) {
@@ -24,11 +40,16 @@ if (-not ("Win32.WinInet" -as [type])) {
 '@ -Name 'WinInet' -Namespace 'Win32' -PassThru | Out-Null
 }
 
+#  LEGACY UPDATE STUBS
+$global:currentVersion       = "5.2.0"
+$global:forceManualUpdate    = $true
+$global:minAutoUpdateVersion = "5.2.0"
+
 #  CENTRAL APP STATE
 $App = [ordered]@{
     # Persisted + path config
     Config = [ordered]@{
-        currentVersion       = "5.2.1"
+        currentVersion       = "5.2.0"
         minAutoUpdateVersion = "5.2.0"
         repoRawUrl           = "https://raw.githubusercontent.com/RichTiTAN/Tor-Multiplexer/main/multiplexer.ps1"
         repoReleaseUrl       = "https://github.com/RichTiTAN/Tor-Multiplexer/releases"
@@ -242,7 +263,6 @@ if (Test-Path $App.Config.cfgFile) {
         $s = Get-Content $App.Config.cfgFile -Raw | ConvertFrom-Json
         if ($null -ne $s.AutoStart)    { $App.Config.autoStart    = [bool]$s.AutoStart }
         if ($null -ne $s.LaunchOnBoot) { $App.Config.launchOnBoot = [bool]$s.LaunchOnBoot }
-        if ($null -ne $s.IsLogsOpen)   { $App.State.isLogsOpen    = [bool]$s.IsLogsOpen }
 
         $cfgMap = @{
             "LastConfig"                = "lastConfig"
@@ -759,288 +779,50 @@ function Show-DirectRulesDialog {
     return $result
 }
 
-
 function Show-CustomBridgeDialog {
     $ix = Get-Content (Get-AppPath "Data\CustomBridgeDialog.xaml") -Raw
     $onLoad = {
         param($d)
-        
-        $global:moatDialogWindow = $d
-        $global:moatBorderMain   = $d.FindName("borderMain")
-        
-        $global:moatTxtInput = $d.FindName("txtInput")
-        $global:moatTxtInput.Text = $App.Config.customBridgeLine
-        $global:moatTxtInput.Focus() | Out-Null
-        $global:moatTxtInput.CaretIndex = $global:moatTxtInput.Text.Length
-
-        $global:moatPanGetBridges = $d.FindName("panGetBridges")
-        $global:moatPanCaptcha    = $d.FindName("panCaptcha")
-        $global:moatImgCaptcha    = $d.FindName("imgCaptcha")
-        $global:moatTxtCaptchaSol = $d.FindName("txtCaptchaSol")
-        $global:moatBtnCaptchaSubmit = $d.FindName("btnCaptchaSubmit")
-        $global:moatBtnCaptchaCancel = $d.FindName("btnCaptchaCancel")
-
-        $global:moatBtnWeb  = $d.FindName("btnGetWebTunnel")
-        $global:moatBtnObfs = $d.FindName("btnGetObfs4")
-        $global:moatBtnOk   = $d.FindName("btnOk")
-        $global:moatBtnCancel = $d.FindName("btnCancel")
-        
-        $global:fetchingBridges = $false
-        $global:moatChallengeId = ""
-        $global:moatChallengeStr = ""
-
-        # DYNAMIC UI SIZING
-        $global:moatSetDialogHeight = {
-            param($isCaptcha)
-            
-            $targetH  = if ($isCaptcha) { 320.0 } else { 260.0 }
-            $tBorderH = if ($isCaptcha) { 266.0 } else { 206.0 }
-            $tBtnTop  = if ($isCaptcha) { 220.0 } else { 165.0 }
-            $tOpac    = if ($isCaptcha) { 1.0   } else { 0.0   }
-
-            $dur = New-Object System.Windows.Duration([TimeSpan]::FromMilliseconds(250))
-            
-            if ($null -ne $global:moatDialogWindow) {
-                $global:moatDialogWindow.BeginAnimation([System.Windows.Window]::HeightProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation([double]$targetH, $dur)))
-            }
-            if ($null -ne $global:moatBorderMain) {
-                $global:moatBorderMain.BeginAnimation([System.Windows.FrameworkElement]::HeightProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation([double]$tBorderH, $dur)))
-            }
-            if ($null -ne $global:moatBtnOk) {
-                $global:moatBtnOk.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation([double]$tBtnTop, $dur)))
-            }
-            if ($null -ne $global:moatBtnCancel) {
-                $global:moatBtnCancel.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation([double]$tBtnTop, $dur)))
-            }
-            if ($null -ne $global:moatPanCaptcha) {
-                if ($isCaptcha) { $global:moatPanCaptcha.Visibility = "Visible" }
-                $global:moatPanCaptcha.BeginAnimation([System.Windows.UIElement]::OpacityProperty, (New-Object System.Windows.Media.Animation.DoubleAnimation([double]$tOpac, $dur)))
-                if (-not $isCaptcha) {
-                    $ht = New-Object System.Windows.Threading.DispatcherTimer
-                    $ht.Interval = [TimeSpan]::FromMilliseconds(250)
-                    $ht.add_Tick({ $ht.Stop(); if ($null -ne $global:moatPanCaptcha) { $global:moatPanCaptcha.Visibility = "Hidden" } }.GetNewClosure())
-                    $ht.Start()
-                }
-            }
-        }
-
-        $global:moatEndpoints = @(
-            "https://bridges.torproject.org/moat",
-            "https://bridges2.torproject.org/moat",
-            "https://tor.eff.org/moat"
-        )
-
-        $global:cancelFetchBlock = {
-            if ($null -ne $App.Runtime.bridgeWebClient) {
-                $App.Runtime.bridgeWebClient.CancelAsync()
-                $App.Runtime.bridgeWebClient.Dispose()
-                $App.Runtime.bridgeWebClient = $null
-            }
-            $global:fetchingBridges = $false
-            if ($null -ne $global:moatBtnWeb)  { $global:moatBtnWeb.Content = "WEBTUNNEL"; $global:moatBtnWeb.IsEnabled = $true }
-            if ($null -ne $global:moatBtnObfs) { $global:moatBtnObfs.Content = "OBFS4";     $global:moatBtnObfs.IsEnabled = $true }
-            if ($null -ne $global:moatBtnOk)   { $global:moatBtnOk.IsEnabled = $true }
-            
-            if ($null -ne $global:moatPanGetBridges) { $global:moatPanGetBridges.Visibility = "Visible" }
-            if ($null -ne $global:moatBtnCaptchaSubmit) {
-                $global:moatBtnCaptchaSubmit.Content = "SUBMIT"
-                $global:moatBtnCaptchaSubmit.IsEnabled = $true
-            }
-            
-            & $global:moatSetDialogHeight $false
-        }
-
-        $global:RequestMoatCheck = {
-            $solution = $global:moatTxtCaptchaSol.Text.Trim()
-            if ([string]::IsNullOrWhiteSpace($solution)) { return }
-
-            $global:moatBtnCaptchaSubmit.Content = "VERIFYING..."
-            $global:moatBtnCaptchaSubmit.IsEnabled = $false
-
-            $url = $global:moatEndpoints[$global:moatIndex] + "/check"
-            
-            $reqBody = @{
-                data = @( @{
-                    id = $global:moatChallengeId
-                    version = "0.1.0"
-                    type = "moat-solution"
-                    transport = $global:moatBridgeType
-                    challenge = $global:moatChallengeStr
-                    solution = $solution
-                    qrcode = "false"
-                } )
-            } | ConvertTo-Json -Depth 5 -Compress
-
-            $App.Runtime.bridgeWebClient = New-Object System.Net.WebClient
-            try {
-                $sysProxy = [System.Net.WebRequest]::GetSystemWebProxy()
-                $sysProxy.Credentials = [System.Net.CredentialCache]::DefaultCredentials
-                $App.Runtime.bridgeWebClient.Proxy = $sysProxy
-            } catch {}
-
-            $App.Runtime.bridgeWebClient.Headers.Add("Content-Type", "application/vnd.api+json")
-            $App.Runtime.bridgeWebClient.Headers.Add("Accept", "application/vnd.api+json")
-            $App.Runtime.bridgeWebClient.Encoding = [System.Text.Encoding]::UTF8
-
-            $App.Runtime.bridgeWebClient.Add_UploadStringCompleted({
-                param($sender, $e)
-                $App.UI.form.Dispatcher.Invoke([System.Action]{
-                    if ($e.Cancelled -or -not $global:fetchingBridges) { return }
-                    if ($null -ne $e.Error) {
-                        if ($null -ne $global:moatTxtCaptchaSol) { $global:moatTxtCaptchaSol.Text = "" }
-                        if ($null -ne $global:moatBtnCaptchaSubmit) { $global:moatBtnCaptchaSubmit.Content = "NEW CAPTCHA..." }
-                        $global:moatIndex = 0
-                        & $global:RequestMoatChallenge
-                        return
-                    }
-
-                    try {
-                        $res = $e.Result | ConvertFrom-Json
-                        if ($res.data -and $res.data[0].bridges -and $res.data[0].bridges.Count -gt 0) {
-                            $lines = $res.data[0].bridges -join "`n"
-                            $existing = $global:moatTxtInput.Text.Trim()
-                            $newLines = $lines.Trim()
-                            $global:moatTxtInput.Text = if ([string]::IsNullOrWhiteSpace($existing)) { $newLines } else { "$existing`n$newLines" }
-                            $global:moatTxtInput.CaretIndex = $global:moatTxtInput.Text.Length
-                            & $global:cancelFetchBlock
-                        } else {
-                            throw "No bridges returned."
-                        }
-                    } catch {
-                        if ($null -ne $global:moatTxtCaptchaSol) { $global:moatTxtCaptchaSol.Text = "" }
-                        if ($null -ne $global:moatBtnCaptchaSubmit) { $global:moatBtnCaptchaSubmit.Content = "NEW CAPTCHA..." }
-                        $global:moatIndex = 0
-                        & $global:RequestMoatChallenge
-                    }
-                })
-                $sender.Dispose()
-            })
-
-            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-            try { $App.Runtime.bridgeWebClient.UploadStringAsync([uri]$url, "POST", $reqBody) }
-            catch { 
-                if ($null -ne $global:moatTxtCaptchaSol) { $global:moatTxtCaptchaSol.Text = "" }
-                $global:moatIndex = 0
-                & $global:RequestMoatChallenge
-            }
-        }
-
-        $global:RequestMoatChallenge = {
-            if ($global:moatIndex -ge $global:moatEndpoints.Count) {
-                & $global:cancelFetchBlock
-                [System.Windows.MessageBox]::Show("Could not reach Tor Project servers.`nTry again later or check your network.", "Fetch Failed", 0, 48) | Out-Null
-                return
-            }
-
-            if ($null -ne $global:moatBtnCaptchaSubmit) { $global:moatBtnCaptchaSubmit.Content = "FETCHING..." }
-            $url = $global:moatEndpoints[$global:moatIndex] + "/fetch"
-            $reqBody = @{ data = @( @{ version = "0.1.0"; type = "client-transports"; supported = @($global:moatBridgeType) } ) } | ConvertTo-Json -Depth 5 -Compress
-
-            $App.Runtime.bridgeWebClient = New-Object System.Net.WebClient
-            try {
-                $sysProxy = [System.Net.WebRequest]::GetSystemWebProxy()
-                $sysProxy.Credentials = [System.Net.CredentialCache]::DefaultCredentials
-                $App.Runtime.bridgeWebClient.Proxy = $sysProxy
-            } catch {}
-
-            $App.Runtime.bridgeWebClient.Headers.Add("Content-Type", "application/vnd.api+json")
-            $App.Runtime.bridgeWebClient.Headers.Add("Accept", "application/vnd.api+json")
-            $App.Runtime.bridgeWebClient.Encoding = [System.Text.Encoding]::UTF8
-
-            $App.Runtime.bridgeWebClient.Add_UploadStringCompleted({
-                param($sender, $e)
-                $App.UI.form.Dispatcher.Invoke([System.Action]{
-                    if ($e.Cancelled -or -not $global:fetchingBridges) { return }
-                    if ($null -ne $e.Error) {
-                        $global:moatIndex++
-                        & $global:RequestMoatChallenge
-                        return
-                    }
-
-                    try {
-                        $res = $e.Result | ConvertFrom-Json
-                        
-                        if ($res.data -and $res.data[0].id -and $res.data[0].image -and $res.data[0].challenge) {
-                            $global:moatChallengeId = $res.data[0].id
-                            $global:moatChallengeStr = $res.data[0].challenge
-                            
-                            $bytes = [Convert]::FromBase64String($res.data[0].image)
-                            $ms = New-Object System.IO.MemoryStream($bytes, 0, $bytes.Length)
-                            $img = New-Object System.Windows.Media.Imaging.BitmapImage
-                            $img.BeginInit(); $img.StreamSource = $ms; $img.CacheOption = [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad; $img.EndInit(); $img.Freeze()
-                            $global:moatImgCaptcha.Source = $img
-
-                            $global:moatPanGetBridges.Visibility = "Hidden"
-                            
-                            & $global:moatSetDialogHeight $true
-
-                            $global:moatTxtCaptchaSol.Text = ""
-                            $global:moatBtnCaptchaSubmit.Content = "SUBMIT"
-                            $global:moatBtnCaptchaSubmit.IsEnabled = $true
-                            $global:moatTxtCaptchaSol.Focus() | Out-Null
-                        } else {
-                            $global:moatIndex++
-                            & $global:RequestMoatChallenge
-                        }
-                    } catch {
-                        $global:moatIndex++
-                        & $global:RequestMoatChallenge
-                    }
-                })
-                $sender.Dispose()
-            })
-
-            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-            try { $App.Runtime.bridgeWebClient.UploadStringAsync([uri]$url, "POST", $reqBody) }
-            catch { $global:moatIndex++; & $global:RequestMoatChallenge }
-        }
-
-        $startFetchWeb = {
-            if ($global:fetchingBridges) { & $global:cancelFetchBlock; return }
-            $global:fetchingBridges = $true
-            $global:moatBridgeType = "webtunnel"
-            $global:moatIndex = 0
-            $global:moatBtnWeb.Content = "FETCHING..."
-            $global:moatBtnObfs.IsEnabled = $false
-            if ($null -ne $global:moatBtnOk) { $global:moatBtnOk.IsEnabled = $false }
-            & $global:RequestMoatChallenge
-        }
-        
-        $startFetchObfs = {
-            if ($global:fetchingBridges) { & $global:cancelFetchBlock; return }
-            $global:fetchingBridges = $true
-            $global:moatBridgeType = "obfs4"
-            $global:moatIndex = 0
-            $global:moatBtnObfs.Content = "FETCHING..."
-            $global:moatBtnWeb.IsEnabled = $false
-            if ($null -ne $global:moatBtnOk) { $global:moatBtnOk.IsEnabled = $false }
-            & $global:RequestMoatChallenge
-        }
-
-        if ($null -ne $global:moatTxtCaptchaSol) {
-            $global:moatTxtCaptchaSol.Add_KeyDown({
-                param($sender, $e)
-                if ($e.Key -eq [System.Windows.Input.Key]::Enter -and $global:moatBtnCaptchaSubmit.IsEnabled) {
-                    & $global:RequestMoatCheck
-                }
-            })
-        }
-
-        if ($null -ne $global:moatBtnWeb)          { $global:moatBtnWeb.Add_Click($startFetchWeb) }
-        if ($null -ne $global:moatBtnObfs)         { $global:moatBtnObfs.Add_Click($startFetchObfs) }
-        if ($null -ne $global:moatBtnCaptchaSubmit){ $global:moatBtnCaptchaSubmit.Add_Click($global:RequestMoatCheck) }
-        if ($null -ne $global:moatBtnCaptchaCancel){ $global:moatBtnCaptchaCancel.Add_Click($global:cancelFetchBlock) }
-
-        $d.FindName("btnCancel").Add_Click($global:cancelFetchBlock)
-        $btnCloseDialog = $d.FindName("btnCloseDialog")
-        if ($null -ne $btnCloseDialog) { $btnCloseDialog.Add_Click($global:cancelFetchBlock) }
+        $t = $d.FindName("txtInput")
+        $t.Text = $App.Config.customBridgeLine
+        $t.Focus() | Out-Null; $t.CaretIndex = $t.Text.Length
     }
     $onSave = {
         param($d)
         $App.Config.customBridgeLine = $d.FindName("txtInput").Text.Trim()
     }
-    
-    return Show-AppDialog -Title "CUSTOM BRIDGE CONFIGURATIONS" -Width 420 -Height 260 -InnerXaml $ix -OnLoad $onLoad -OnSave $onSave
+    return Show-AppDialog -Title "CUSTOM BRIDGE CONFIGURATIONS" -Width 420 -Height 230 -InnerXaml $ix -OnLoad $onLoad -OnSave $onSave
+}
+
+function Show-V2rayDialog {
+    $ix = Get-Content (Get-AppPath "Data\V2rayDialog.xaml") -Raw
+    $onLoad = {
+        param($d)
+        $t = $d.FindName("txtInput")
+        $t.Text = $App.Config.v2rayChainJson
+        $t.Focus() | Out-Null; $t.CaretIndex = $t.Text.Length
+        $d.FindName("btnImport").Add_Click({
+            $fd = New-Object System.Windows.Forms.OpenFileDialog
+            $fd.Filter = "JSON Files (*.json)|*.json|All Files (*.*)|*.*"
+            if ($fd.ShowDialog() -eq "OK") { $t.Text = Get-Content $fd.FileName -Raw }
+        }.GetNewClosure())
+    }
+    $onSave = {
+        param($d)
+        $txt = $d.FindName("txtInput").Text
+        if ([string]::IsNullOrWhiteSpace($txt)) { $App.Config.v2rayChainJson = ""; return $true }
+        try {
+            $parsed   = $txt | ConvertFrom-Json
+            $testNode = if ($null -ne $parsed.outbounds) { $parsed.outbounds[0] } else { $parsed }
+            if (-not $testNode.protocol) { throw "Missing Protocol" }
+            $App.Config.v2rayChainJson = $txt.Trim()
+            return $true
+        } catch {
+            [System.Windows.Forms.MessageBox]::Show("Invalid Xray JSON syntax!", "Validation Error", 0, 16)
+            return $false
+        }
+    }
+    return Show-AppDialog -Title "V2RAY OUTBOUND CHAIN CONFIGURATION" -Width 520 -Height 355 -InnerXaml $ix -OnLoad $onLoad -OnSave $onSave
 }
 
 function Show-OutboundProxyDialog {
@@ -1197,43 +979,11 @@ function Show-ExpertConfigDialog {
     return Show-AppDialog -Title "EXPERT TORRC CONFIGURATION" -Width 530 -Height 530 -InnerXaml $ix -OnLoad $onLoad -OnSave $onSave
 }
 
-function Show-V2rayDialog {
-    $ix = Get-Content (Get-AppPath "Data\V2rayDialog.xaml") -Raw
-    $onLoad = {
-        param($d)
-        $t = $d.FindName("txtInput")
-        $t.Text = $App.Config.v2rayChainJson
-        $t.Focus() | Out-Null; $t.CaretIndex = $t.Text.Length
-        $d.FindName("btnImport").Add_Click({
-            $fd = New-Object System.Windows.Forms.OpenFileDialog
-            $fd.Filter = "JSON Files (*.json)|*.json|All Files (*.*)|*.*"
-            if ($fd.ShowDialog() -eq "OK") { $t.Text = Get-Content $fd.FileName -Raw }
-        }.GetNewClosure())
-    }
-    $onSave = {
-        param($d)
-        $txt = $d.FindName("txtInput").Text
-        if ([string]::IsNullOrWhiteSpace($txt)) { $App.Config.v2rayChainJson = ""; return $true }
-        try {
-            $parsed   = $txt | ConvertFrom-Json
-            $testNode = if ($null -ne $parsed.outbounds) { $parsed.outbounds[0] } else { $parsed }
-            if (-not $testNode.protocol) { throw "Missing Protocol" }
-            $App.Config.v2rayChainJson = $txt.Trim()
-            return $true
-        } catch {
-            [System.Windows.Forms.MessageBox]::Show("Invalid Xray JSON syntax!", "Validation Error", 0, 16)
-            return $false
-        }
-    }
-    return Show-AppDialog -Title "V2RAY OUTBOUND CHAIN CONFIGURATION" -Width 520 -Height 355 -InnerXaml $ix -OnLoad $onLoad -OnSave $onSave
-}
-
 #  CORE LOGIC
 function Save-Config {
     $data = [ordered]@{
         AutoStart            = [bool]$App.Config.autoStart
         LaunchOnBoot         = [bool]$App.Config.launchOnBoot
-        IsLogsOpen           = [bool]$App.State.isLogsOpen
         DebugMode            = [bool]$App.Config.debugMode      
         LastConfig           = if ($App.UI.comboConfig.SelectedItem) { $App.UI.comboConfig.SelectedItem.Tag } else { $App.Config.lastConfig }
         SelectedBridge       = $App.UI.comboBridge.SelectedItem.Tag
@@ -2326,7 +2076,7 @@ $App.UI.btnAdBlockLbl.Add_Click({ $App.UI.btnAdBlockTog.RaiseEvent((New-Object S
 
 #  WINDOW CLOSE
 $App.UI.form.add_Closing({
-    if ($null -ne $App.Runtime.statsTimer)      { $App.Runtime.statsTimer.Stop() }
+    $App.Runtime.statsTimer.Stop()
     $logTimer.Stop()
     $logClearTimer.Stop()
     if ($null -ne $App.Runtime.wavePhysicsTimer) { $App.Runtime.wavePhysicsTimer.Stop() }
@@ -2357,7 +2107,7 @@ $App.UI.form.add_Closing({
 
 $App.UI.form.add_Closed({ [Environment]::Exit(0) })
 
-#  CONTENT RENDERED 
+#  CONTENT RENDERED — splash dismiss + auto-start
 $App.UI.form.add_ContentRendered({
     try {
         if ($App.State.appInitialized) { return }
@@ -2371,13 +2121,13 @@ $App.UI.form.add_ContentRendered({
             $App.UI.borderClip.Clip = $_clipGeom
         }
 
-        if ($App.State.isLogsOpen) { Update-WindowSize }
-
+        # ── Splash: brief hold then fade out 
         $splashHold = New-Object System.Windows.Threading.DispatcherTimer
         $splashHold.Interval = [TimeSpan]::FromMilliseconds(900)
         $splashHold.add_Tick({
             $splashHold.Stop()
             $fadeDur  = New-Object System.Windows.Duration([TimeSpan]::FromMilliseconds(650))
+            # Splash fades OUT
             $fadeAnim = New-Object System.Windows.Media.Animation.DoubleAnimation(0.0, $fadeDur)
             $fadeAnim.EasingFunction = New-Object System.Windows.Media.Animation.CubicEase
             $fadeAnim.add_Completed({
@@ -2385,6 +2135,7 @@ $App.UI.form.add_ContentRendered({
                 $App.UI.splashOverlay.IsHitTestVisible = $false
             }.GetNewClosure())
             $App.UI.splashOverlay.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $fadeAnim)
+            # Window outline fades IN at the same time
             if ($null -ne $App.UI.windowOutline) {
                 $outlineAnim = New-Object System.Windows.Media.Animation.DoubleAnimation(1.0, $fadeDur)
                 $outlineAnim.EasingFunction = New-Object System.Windows.Media.Animation.CubicEase
@@ -2393,7 +2144,7 @@ $App.UI.form.add_ContentRendered({
         }.GetNewClosure())
         $splashHold.Start()
 
-        # Normal startup tasks 
+        # ── Normal startup tasks 
         Check-UpdateSilent
         if ($App.Config.autoStart) {
             $animT = New-Object System.Windows.Threading.DispatcherTimer
