@@ -5,6 +5,14 @@ Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
 
+# SINGLE INSTANCE MUTEX
+$createdNew = $false
+$global:appMutex = New-Object System.Threading.Mutex($true, "Global\TorMultiplexer_SingleInstance", [ref]$createdNew)
+if (-not $createdNew) {
+    [System.Windows.Forms.MessageBox]::Show("Tor Multiplexer is already running!", "Already Running", 0, 48)
+    [Environment]::Exit(0)
+}
+
 [System.Windows.Media.RenderOptions]::ProcessRenderMode = [System.Windows.Interop.RenderMode]::Default
 [System.AppDomain]::CurrentDomain.add_ProcessExit({
     Stop-AllEngines -isClosing $true
@@ -12,7 +20,7 @@ Add-Type -AssemblyName WindowsBase
 })
 
 #  LEGACY UPDATE STUBS
-$global:currentVersion       = "5.2.1"
+$global:currentVersion       = "5.2.2"
 $global:forceManualUpdate    = $true
 $global:minAutoUpdateVersion = "5.2.1"
 
@@ -28,7 +36,7 @@ if (-not ("Win32.WinInet" -as [type])) {
 $App = [ordered]@{
     # Persisted + path config
     Config = [ordered]@{
-        currentVersion       = "5.2.1"
+        currentVersion       = "5.2.2"
         minAutoUpdateVersion = "5.2.1"
         repoRawUrl           = "https://raw.githubusercontent.com/RichTiTAN/Tor-Multiplexer/main/multiplexer.ps1"
         repoReleaseUrl       = "https://github.com/RichTiTAN/Tor-Multiplexer/releases"
@@ -108,7 +116,10 @@ $App = [ordered]@{
         xrayDohPid        = $null
         isFetchingStats   = $false
         statsWebClient    = $null
+        geoWebClient      = $null
+        saveDebounceTimer = $null
         statsTimer        = $null
+        bootstrapTimer    = $null
         wavePhysicsTimer  = $null
         waveHoldTimer     = $null
         pingTimer         = $null
@@ -317,16 +328,12 @@ function Show-AppDialog {
     
     $bW = $Width - 30
     $bH = $Height - 54
-
-    # 1. Load the base dialog template
     $dialogTemplatePath = Get-AppPath "Data\DialogBase.xaml"
     if (-not (Test-Path $dialogTemplatePath)) {
         [System.Windows.Forms.MessageBox]::Show("DialogBase.xaml not found!", "Error", 0, 16)
         return $false
     }
     $xamlTemplate = Get-Content $dialogTemplatePath -Raw
-
-    # 2. Inject the specific dialog parameters and inner elements
     $xaml = $xamlTemplate.Replace("{Title}", $Title)
     $xaml = $xaml.Replace("{Width}", $Width.ToString())
     $xaml = $xaml.Replace("{Height}", $Height.ToString())
@@ -334,7 +341,6 @@ function Show-AppDialog {
     $xaml = $xaml.Replace("{InnerHeight}", $bH.ToString())
     $xaml = $xaml.Replace("{InnerXaml}", $InnerXaml)
 
-    # 3. Parse and build the window
     $dlg = [Windows.Markup.XamlReader]::Parse($xaml)
     $dlg.Owner = $App.UI.form
     $dlg.Add_MouseLeftButtonDown({
@@ -342,12 +348,6 @@ function Show-AppDialog {
         if ($e.ChangedButton -eq 'Left') {
             try { $dlg.DragMove() } catch {}
         }
-    }.GetNewClosure())
-    $dlg.Add_SourceInitialized({
-        try {
-            $hwnd = (New-Object System.Windows.Interop.WindowInteropHelper($dlg)).Handle
-            [DWM]::DarkTitleBar($hwnd)
-        } catch {}
     }.GetNewClosure())
 
     $btnOk = $dlg.FindName("btnOk")
@@ -384,7 +384,6 @@ if (-not (Test-Path $xamlPath)) {
 }
 $xaml = Get-Content $xamlPath -Raw
 
-#  Strip x:Class before parsing
 $xaml = $xaml -replace 'x:Class="[^"]*"', ''
 
 #  COMPILE XAML
@@ -457,6 +456,10 @@ $App.UI.brGreen           = $_bc.ConvertFromString("#68D391")
 $App.UI.brGray            = $_bc.ConvertFromString("#A0AEC0")
 $App.UI.brRed             = $_bc.ConvertFromString("#E53E3E")
 $App.UI.brWhite           = $_bc.ConvertFromString("#FFFFFF")
+$App.UI.brDarkRed         = $_bc.ConvertFromString("#8B4A4A") 
+$App.UI.brDarkGray        = $_bc.ConvertFromString("#4A5568") 
+$App.UI.brOrange          = $_bc.ConvertFromString("#F6AD55")  
+$App.UI.brTransparent     = [System.Windows.Media.Brushes]::Transparent
 $App.UI.brTransparent     = [System.Windows.Media.Brushes]::Transparent
 $App.UI.brActiveRouting   = $_bc.ConvertFromString("#80646B75")
 $App.UI.brInactiveRouting = [System.Windows.Media.Brushes]::Transparent
@@ -1229,6 +1232,19 @@ function Show-V2rayDialog {
 }
 
 #  CORE LOGIC
+function Request-ConfigSave {
+    if ($null -eq $App.Runtime.saveDebounceTimer) {
+        $App.Runtime.saveDebounceTimer = New-Object System.Windows.Threading.DispatcherTimer
+        $App.Runtime.saveDebounceTimer.Interval = [TimeSpan]::FromMilliseconds(500)
+        $App.Runtime.saveDebounceTimer.add_Tick({
+            $App.Runtime.saveDebounceTimer.Stop()
+            Save-Config
+        }.GetNewClosure())
+    }
+    $App.Runtime.saveDebounceTimer.Stop()
+    $App.Runtime.saveDebounceTimer.Start()
+}
+
 function Save-Config {
     $data = [ordered]@{
         AutoStart            = [bool]$App.Config.autoStart
@@ -1236,8 +1252,8 @@ function Save-Config {
         IsLogsOpen           = [bool]$App.State.isLogsOpen
         DebugMode            = [bool]$App.Config.debugMode      
         LastConfig           = if ($App.UI.comboConfig.SelectedItem) { $App.UI.comboConfig.SelectedItem.Tag } else { $App.Config.lastConfig }
-        SelectedBridge       = $App.UI.comboBridge.SelectedItem.Tag
-        InstanceCount        = [int]$App.UI.comboCount.SelectedItem.Tag
+        SelectedBridge       = if ($App.UI.comboBridge.SelectedItem) { $App.UI.comboBridge.SelectedItem.Tag } else { $App.Config.lastBridge }
+        InstanceCount        = if ($App.UI.comboCount.SelectedItem)  { [int]$App.UI.comboCount.SelectedItem.Tag } else { [int]$App.Config.lastCount }
         XrayMode             = $App.Config.lastXrayMode
         ManualSplit          = $App.Config.lastManualSplit
         AppSplit             = $App.Config.lastAppSplit
@@ -1320,7 +1336,14 @@ function Write-XrayConfig {
     if ($App.Config.enableUpstreamDoh -and -not [string]::IsNullOrWhiteSpace($App.Config.upstreamDohUrl)) {
         $cfg.Add("dns", @{ servers=@($App.Config.upstreamDohUrl) })
     }
-    $cfg | ConvertTo-Json -Depth 10 | Set-Content (Get-AppPath "Data\Xray\config.json")
+    
+    try { 
+        $cfg | ConvertTo-Json -Depth 10 | Set-Content (Get-AppPath "Data\Xray\config.json") -ErrorAction Stop 
+        return $true
+    } catch { 
+        [System.Windows.Forms.MessageBox]::Show("Failed to write Xray config. Check disk space and permissions.`n`n$($_.Exception.Message)", "Config Error", 0, 16)
+        return $false 
+    }
 }
 
 function Write-SingboxConfig {
@@ -1384,7 +1407,15 @@ function Write-SingboxConfig {
             rules                  = $sbRules; final = "proxy"
             default_domain_resolver = @{ server = "dns_direct" }
         }
-    } | ConvertTo-Json -Depth 10 | Set-Content (Get-AppPath "Data\sing_box\config.json")
+    } 
+    
+    try { 
+        $sbConfig | ConvertTo-Json -Depth 10 | Set-Content (Get-AppPath "Data\sing_box\config.json") -ErrorAction Stop
+        return $true
+    } catch {
+        [System.Windows.Forms.MessageBox]::Show("Failed to write Sing-Box config. Check disk space and permissions.`n`n$($_.Exception.Message)", "Config Error", 0, 16)
+        return $false 
+    }
 }
 
 function Disable-SystemProxy {
@@ -1407,7 +1438,12 @@ function Format-HAProxyConfig($activeCount) {
         } else { $newData += $line }
     }
     if (-not $hasStats) { $newData += "","listen stats","    bind 127.0.0.1:10888","    mode http","    stats enable","    stats uri /stats" }
-    $newData | Set-Content $cfgPath
+    
+    $oldText = $haData -join "`n"
+    $newText = $newData -join "`n"
+    if ($oldText -ne $newText) {
+        $newData | Set-Content $cfgPath
+    }
 }
 
 function Restart-Xray($targetMode) {
@@ -1423,7 +1459,7 @@ function Restart-Xray($targetMode) {
     if ($null -ne $App.Runtime.xrayDohPid)   { Stop-Process -Id $App.Runtime.xrayDohPid   -Force -ErrorAction SilentlyContinue; $App.Runtime.xrayDohPid   = $null }
 
     Start-Sleep -Milliseconds 500
-    Write-XrayConfig
+    if (-not (Write-XrayConfig)) { return }
 
     if ($App.Config.debugMode) {
         $p = Start-Process "cmd.exe" -ArgumentList "/c `"title XrayDebug & .\xray.exe run -c config.json || pause`"" -WorkingDirectory $App.Config.xrayDir -WindowStyle Normal -PassThru
@@ -1432,7 +1468,7 @@ function Restart-Xray($targetMode) {
         Start-Process -FilePath (Get-AppPath "Data\Xray\xray.exe") -ArgumentList "run -c config.json" -WorkingDirectory $App.Config.xrayDir -WindowStyle Hidden
     }
     if ($targetMode -eq "VPN Mode") {
-        Write-SingboxConfig
+        if (-not (Write-SingboxConfig)) { return }
         if ($App.Config.debugMode) {
             $p2 = Start-Process "cmd.exe" -ArgumentList "/c `"title SingBoxDebug & .\sing-box.exe run -c config.json || pause`"" -WorkingDirectory $App.Config.sbDir -WindowStyle Normal -PassThru
             $App.Runtime.cmdDebugPid2 = $p2.Id
@@ -1508,10 +1544,16 @@ function Start-GeoPing {
     $App.State.isGeoTracing = $true
     $App.UI.lblGeoData.Text       = "Loc: TRACING...`nPing: --"
     $App.UI.lblGeoData.Foreground = $App.UI.brGreen
-    $gc = New-Object System.Net.WebClient
-    $gc.Proxy = New-Object System.Net.WebProxy("http://127.0.0.1:10818")
+    
+    if ($null -ne $App.Runtime.geoWebClient) {
+        $App.Runtime.geoWebClient.CancelAsync()
+        $App.Runtime.geoWebClient.Dispose()
+    }
+
+    $App.Runtime.geoWebClient = New-Object System.Net.WebClient
+    $App.Runtime.geoWebClient.Proxy = New-Object System.Net.WebProxy("http://127.0.0.1:10818")
     $App.Runtime.geoSw = [System.Diagnostics.Stopwatch]::StartNew()
-    $gc.Add_DownloadStringCompleted({
+    $App.Runtime.geoWebClient.Add_DownloadStringCompleted({
         param($sender, $e)
         $App.State.isGeoTracing = $false
         $App.Runtime.geoSw.Stop()
@@ -1534,14 +1576,22 @@ function Start-GeoPing {
                         } else { $geoStr = $continent }
                         $App.UI.lblGeoData.Text       = "Loc: $($geoStr.ToUpper())`nPing: $($pingMs)ms"
                         $App.UI.lblGeoData.Foreground = $App.UI.brGreen
-                    } catch { $App.UI.lblGeoData.Text = "Loc: ERROR`nPing: --"; $App.UI.lblGeoData.Foreground = $_bc.ConvertFromString("#8B4A4A") }
-                } else { $App.UI.lblGeoData.Text = "Loc: TIMEOUT`nPing: --"; $App.UI.lblGeoData.Foreground = $_bc.ConvertFromString("#8B4A4A") }
+                    } catch { $App.UI.lblGeoData.Text = "Loc: ERROR`nPing: --"; $App.UI.lblGeoData.Foreground = $App.UI.brDarkRed }
+                } else { $App.UI.lblGeoData.Text = "Loc: TIMEOUT`nPing: --"; $App.UI.lblGeoData.Foreground = $App.UI.brDarkRed }
             }
         })
         $sender.Dispose()
-    })
-    try { $gc.DownloadStringAsync([uri]"https://get.geojs.io/v1/ip/geo.json") }
-    catch { $App.State.isGeoTracing = $false; $gc.Dispose() }
+        $App.Runtime.geoWebClient = $null
+    }.GetNewClosure())
+    
+    try { $App.Runtime.geoWebClient.DownloadStringAsync([uri]"https://get.geojs.io/v1/ip/geo.json") }
+    catch { 
+        $App.State.isGeoTracing = $false
+        if ($null -ne $App.Runtime.geoWebClient) { 
+            $App.Runtime.geoWebClient.Dispose()
+            $App.Runtime.geoWebClient = $null
+        }
+    }
 }
 
 #  ENGINE CONTROL
@@ -1555,6 +1605,9 @@ function Reset-ButtonText {
 function Stop-AllEngines($isClosing = $false) {
     $App.State.abortBoot       = $true
     $App.State.isEngineRunning = $false
+    if ($null -ne $App.Runtime.bootstrapTimer) { 
+        $App.Runtime.bootstrapTimer.Stop() 
+    }
     Set-SystemProxy $false
     Get-Process tor, haproxy, xray, sing-box -ErrorAction SilentlyContinue | ForEach-Object {
         try {
@@ -1634,12 +1687,12 @@ function Start-Engines {
         Update-WaveAnimation -State "Connecting"
         Format-HAProxyConfig $selCount
 
-        $dynamicWait = 16 - $selCount
+        $staggerDelay = 5
 
         for ($i = 1; $i -le $selCount; $i++) {
             if ($App.State.abortBoot) { break }
             $padded = $i.ToString().PadLeft(2,'0')
-            $App.UI.btnActionSubText.Text = "Booting Tor $i of $selCount"
+            $App.UI.btnActionSubText.Text = "Launching Tor $i of $selCount"
             if ($i % 2 -eq 0) { DoEvents }
 
             $path = Get-AppPath "Data\Tors\Tor$i"
@@ -1721,17 +1774,72 @@ function Start-Engines {
 
             $cleanCfg | Set-Content "$path\$torrcFile"
             Start-Process -FilePath "Data\TorBin\tor.exe" -ArgumentList "-f $torrcFile" -WorkingDirectory $path -WindowStyle $winStyle
-            Wait-NonBlocking $dynamicWait
+            Wait-NonBlocking $staggerDelay
         }
-        if (-not $App.State.abortBoot) {
+        if ($App.State.abortBoot) { return }
+
+        # BOOTSTRAP POLLING 
+        $isBridged    = ($selBridge -ne "Direct (None)")
+        $hardTimeout  = if ($isBridged) { 300 } else { 180 }
+        $pollDeadline = (Get-Date).AddSeconds($hardTimeout)
+
+        $App.UI.btnActionSubText.Text = "Waiting for Tor bootstrap..."
+
+        $pollSelCount = $selCount
+        $pollMode     = $mode
+        $pollWinStyle = $winStyle
+        $pollSelBridge = $selBridge
+
+        if ($null -ne $App.Runtime.bootstrapTimer) { $App.Runtime.bootstrapTimer.Stop() }
+        
+        $App.Runtime.bootstrapTimer = New-Object System.Windows.Threading.DispatcherTimer
+        $App.Runtime.bootstrapTimer.Interval = [TimeSpan]::FromMilliseconds(500)
+        $App.Runtime.bootstrapTimer.add_Tick({
+            if ($App.State.abortBoot) {
+                $App.Runtime.bootstrapTimer.Stop()
+                Reset-ButtonText
+                return
+            }
+
+            $oneReady   = $false
+            $bestPct    = -1
+            $bestTorIdx = 1
+            for ($i = 1; $i -le $pollSelCount; $i++) {
+                $logPath = Get-AppPath "Data\Tors\Tor$i\tor.log"
+                if (-not (Test-Path $logPath)) { continue }
+                try {
+                    $fs      = New-Object System.IO.FileStream($logPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+                    $sr      = New-Object System.IO.StreamReader($fs)
+                    $content = $sr.ReadToEnd(); $sr.Close(); $fs.Close()
+                    $pm = [regex]::Matches($content, 'Bootstrapped (\d+)%')
+                    if ($pm.Count -gt 0) {
+                        $pct = [int]$pm[$pm.Count - 1].Groups[1].Value
+                        if ($pct -gt $bestPct) { $bestPct = $pct; $bestTorIdx = $i }
+                        if ($pct -eq 100) { $oneReady = $true }
+                    }
+                } catch {}
+            }
+            if (-not $oneReady) {
+                if ((Get-Date) -ge $pollDeadline) {
+                    $shortWarning = "Still Bootstrapping, Consider different bridges"
+                    if ($App.UI.btnActionSubText.Text -ne $shortWarning) {
+                        $App.UI.btnActionSubText.Text = $shortWarning
+                    }
+                } elseif ($bestPct -ge 0) {
+                    $App.UI.btnActionSubText.Text = "Bootstrapping... $bestPct% (Tor $bestTorIdx)"
+                }
+                return
+            }
+
+            $App.Runtime.bootstrapTimer.Stop()
+
             $App.UI.btnActionSubText.Text = "Booting Core Engines"
-            DoEvents
             Remove-Item (Get-AppPath "Data\Xray\access.log") -ErrorAction SilentlyContinue
             Remove-Item (Get-AppPath "Data\Xray\error.log")  -ErrorAction SilentlyContinue
             if (Test-Path (Get-AppPath "Data\HAproxy\haproxy.exe")) {
-                Start-Process -FilePath (Get-AppPath "Data\HAproxy\haproxy.exe") -ArgumentList "-f haproxy.cfg" -WorkingDirectory $App.Config.haPath -WindowStyle $winStyle
+                Start-Process -FilePath (Get-AppPath "Data\HAproxy\haproxy.exe") -ArgumentList "-f haproxy.cfg" -WorkingDirectory $App.Config.haPath -WindowStyle $pollWinStyle
             }
-            Restart-Xray $mode
+            Restart-Xray $pollMode
             $App.UI.lblSocksTitle.Text    = "MIXED PORT"
             $App.UI.lblSocksDataIPs.Text  = "127.0.0.1:10818`n$($App.State.lanIp)`:10818"
             $App.UI.lblSocksDataTags.Text = "(Local)`n(LAN)"
@@ -1742,7 +1850,8 @@ function Start-Engines {
             $App.UI.btnActionMainText.Foreground = $App.UI.brGreen
             Start-GeoPing
             Update-WaveAnimation -State "Connected"
-        } else { Reset-ButtonText }
+        }.GetNewClosure())
+        $App.Runtime.bootstrapTimer.Start()
     } catch {
         [System.Windows.Forms.MessageBox]::Show("A startup error occurred:`n$($_.Exception.Message)", "Error", 0, 16)
         Reset-ButtonText
@@ -2078,8 +2187,8 @@ $logTimer.add_Tick({
                 $lbl = $App.UI.form.FindName("lblTor$i")
                 if ($null -ne $lbl) {
                     $padded = $i.ToString().PadLeft(2,'0')
-                    if ($i -le $selCount) { $lbl.Text = "Tor $padded`: Offline";  $lbl.Foreground = $_bc.ConvertFromString("#4A5568") }
-                    else                  { $lbl.Text = "Tor $padded`: Disabled"; $lbl.Foreground = $_bc.ConvertFromString("#4A5568") }
+                    if ($i -le $selCount) { $lbl.Text = "Tor $padded`: Offline";  $lbl.Foreground = $App.UI.brDarkGray }
+                    else                  { $lbl.Text = "Tor $padded`: Disabled"; $lbl.Foreground = $App.UI.brDarkGray }
                 }
             }
             if ($null -ne $App.UI.txtXrayLogs) { $App.UI.txtXrayLogs.Text = "" }
@@ -2090,6 +2199,9 @@ $logTimer.add_Tick({
             if ($null -eq $lbl) { continue }
             $padded = $i.ToString().PadLeft(2,'0')
             if ($i -gt $selCount) { $lbl.Text = "Tor $padded`: Disabled"; $lbl.Foreground = $_bc.ConvertFromString("#4A5568"); continue }
+            
+            if ($lbl.Text -match "100%") { continue }
+
             $logPath = Get-AppPath "Data\Tors\Tor$i\tor.log"
             if (Test-Path $logPath) {
                 try {
@@ -2100,7 +2212,7 @@ $logTimer.add_Tick({
                     if ($pm.Count -gt 0) {
                         $pct = $pm[$pm.Count-1].Groups[1].Value
                         $lbl.Text       = "Tor $padded`: $pct%"
-                        $lbl.Foreground = if ($pct -eq "100") { $App.UI.brGreen } else { $_bc.ConvertFromString("#F6AD55") }
+                        $lbl.Foreground = if ($pct -eq "100") { $App.UI.brGreen } else { $App.UI.brOrange }
                     } else { $lbl.Text = "Tor $padded`: Booting..."; $lbl.Foreground = $App.UI.brGray }
                 } catch {}
             } else { $lbl.Text = "Tor $padded`: Waiting..."; $lbl.Foreground = $App.UI.brGray }
@@ -2197,10 +2309,10 @@ $App.UI.comboConfig.add_SelectionChanged({
         else { $App.State.previousConfig = "Expert" }
         $App.State.ignoreComboChange = $false
     } else { $App.State.previousConfig = $tag }
-    Save-Config
+    Request-ConfigSave
 })
 
-$App.UI.comboCount.add_SelectionChanged({ Save-Config })
+$App.UI.comboCount.add_SelectionChanged({ Request-ConfigSave })
 
 #  BUTTON EVENTS
 $App.UI.btnStatsPanel.add_Click({ if ($App.State.isConnected) { Start-GeoPing } })
@@ -2210,7 +2322,7 @@ $App.UI.btnAction.add_Click({
 $App.UI.btnAutoStartMain.Add_Click({
     $App.Config.autoStart = -not $App.Config.autoStart
     Set-AutoConnectState $App.Config.autoStart $true
-    Save-Config
+    Request-ConfigSave
 })
 $App.UI.btnAdvMain.Add_Click({
     $App.State.isAdvancedOpen = -not $App.State.isAdvancedOpen
@@ -2231,7 +2343,7 @@ $App.UI.btnCloseLogs.add_Click({
     if ($App.State.isLogsOpen) {
         $App.State.isLogsOpen = $false
         Set-WpfToggleState $App.UI.btnLogsTog $false "HIDE" "SHOW"
-        Update-WindowSize; Save-Config
+        Update-WindowSize; Request-ConfigSave
     }
 })
 
@@ -2239,7 +2351,7 @@ $toggleModeAction = {
     param($mode)
     if ($App.Config.lastXrayMode -ne $mode) {
         $App.Config.lastXrayMode = $mode
-        Update-RoutingToggle; Save-Config
+        Update-RoutingToggle; Request-ConfigSave
         if ($App.State.isConnected) { Restart-Xray $mode }
     }
 }
@@ -2256,7 +2368,7 @@ $App.UI.btnV2rayTog.Add_Click({
     }
     $App.Config.enableV2rayChain = -not $App.Config.enableV2rayChain
     Set-WpfToggleState $App.UI.btnV2rayTog $App.Config.enableV2rayChain
-    Save-Config
+    Request-ConfigSave
     if ($App.State.isConnected) { Restart-Xray $App.Config.lastXrayMode }
 })
 $App.UI.btnV2rayLbl.Add_Click({ Show-V2rayDialog | Out-Null; Set-WpfToggleState $App.UI.btnV2rayTog $App.Config.enableV2rayChain })
@@ -2268,7 +2380,7 @@ $App.UI.btnDirectTog.Add_Click({
     }
     $App.Config.enableDirect = $newState
     Set-WpfToggleState $App.UI.btnDirectTog $App.Config.enableDirect
-    Save-Config
+    Request-ConfigSave
     if ($App.State.isConnected) { Restart-Xray $App.Config.lastXrayMode }
 })
 $App.UI.btnDirectLbl.Add_Click({ Show-DirectRulesDialog | Out-Null })
@@ -2281,7 +2393,7 @@ $App.UI.btnOutboundTog.Add_Click({
     }
     $App.Config.enableOutboundProxy = $newState
     Set-WpfToggleState $App.UI.btnOutboundTog $App.Config.enableOutboundProxy
-    Save-Config
+    Request-ConfigSave
 })
 $App.UI.btnOutboundLbl.Add_Click({ Show-OutboundProxyDialog | Out-Null; Set-WpfToggleState $App.UI.btnOutboundTog $App.Config.enableOutboundProxy })
 
@@ -2289,13 +2401,13 @@ $App.UI.btnDohTog.Add_Click({
     if ($App.State.isConnected) { [System.Windows.Forms.MessageBox]::Show("Disconnect first.", "Action Denied", 0, 48); return }
     if ($App.Config.enableUpstreamDoh) {
         $App.Config.enableUpstreamDoh = $false
-        Set-WpfToggleState $App.UI.btnDohTog $false; Save-Config; Evaluate-ProxyExclusivity
+        Set-WpfToggleState $App.UI.btnDohTog $false; Request-ConfigSave; Evaluate-ProxyExclusivity
     } else {
         if (-not (Show-DohDialog)) { Set-WpfToggleState $App.UI.btnDohTog $false }
         else {
             $App.Config.enableUpstreamDoh = $true
             Set-WpfToggleState $App.UI.btnDohTog $true
-            Save-Config
+            Request-ConfigSave
             Evaluate-ProxyExclusivity
         }
     }
@@ -2305,24 +2417,24 @@ $App.UI.btnDohLbl.Add_Click({ Show-DohDialog | Out-Null; Set-WpfToggleState $App
 # Simple toggles
 $App.UI.btnBootTog.Add_Click({
     $App.Config.launchOnBoot = -not $App.Config.launchOnBoot
-    Set-WpfToggleState $App.UI.btnBootTog $App.Config.launchOnBoot; Update-BootShortcut; Save-Config
+    Set-WpfToggleState $App.UI.btnBootTog $App.Config.launchOnBoot; Update-BootShortcut; Request-ConfigSave
 })
 $App.UI.btnDebugTog.Add_Click({
     $App.Config.debugMode = -not $App.Config.debugMode
     Set-WpfToggleState $App.UI.btnDebugTog $App.Config.debugMode
-    Save-Config  
+    Request-ConfigSave  
 })
 $App.UI.btnTrayTog.Add_Click({
     $App.Config.minimizeToTray = -not $App.Config.minimizeToTray
-    Set-WpfToggleState $App.UI.btnTrayTog $App.Config.minimizeToTray; Save-Config
+    Set-WpfToggleState $App.UI.btnTrayTog $App.Config.minimizeToTray; Request-ConfigSave
 })
 $App.UI.btnLogsTog.Add_Click({
     $App.State.isLogsOpen = -not $App.State.isLogsOpen
-    Set-WpfToggleState $App.UI.btnLogsTog $App.State.isLogsOpen "HIDE" "SHOW"; Update-WindowSize; Save-Config
+    Set-WpfToggleState $App.UI.btnLogsTog $App.State.isLogsOpen "HIDE" "SHOW"; Update-WindowSize; Request-ConfigSave
 })
 $App.UI.btnAdBlockTog.Add_Click({
     $App.Config.enableAdBlock = -not $App.Config.enableAdBlock
-    Set-WpfToggleState $App.UI.btnAdBlockTog $App.Config.enableAdBlock; Save-Config
+    Set-WpfToggleState $App.UI.btnAdBlockTog $App.Config.enableAdBlock; Request-ConfigSave
     if ($App.State.isConnected) { Restart-Xray $App.Config.lastXrayMode }
 })
 
@@ -2335,6 +2447,10 @@ $App.UI.btnAdBlockLbl.Add_Click({ $App.UI.btnAdBlockTog.RaiseEvent((New-Object S
 
 #  WINDOW CLOSE
 $App.UI.form.add_Closing({
+    if ($null -ne $App.Runtime.saveDebounceTimer -and $App.Runtime.saveDebounceTimer.IsEnabled) {
+        $App.Runtime.saveDebounceTimer.Stop()
+        Save-Config
+    }
     if ($null -ne $App.Runtime.statsTimer)      { $App.Runtime.statsTimer.Stop() }
     $logTimer.Stop()
     $logClearTimer.Stop()
@@ -2355,6 +2471,13 @@ $App.UI.form.add_Closing({
             $App.Runtime.statsWebClient.CancelAsync()
             $App.Runtime.statsWebClient.Dispose()
             $App.Runtime.statsWebClient = $null
+        }
+    } catch {}
+    try {
+        if ($null -ne $App.Runtime.geoWebClient) {
+            $App.Runtime.geoWebClient.CancelAsync()
+            $App.Runtime.geoWebClient.Dispose()
+            $App.Runtime.geoWebClient = $null
         }
     } catch {}
     Stop-AllEngines $true
@@ -2380,8 +2503,6 @@ $App.UI.form.add_ContentRendered({
             $App.UI.borderClip.Clip = $_clipGeom
         }
 
-        if ($App.State.isLogsOpen) { Update-WindowSize }
-
         $splashHold = New-Object System.Windows.Threading.DispatcherTimer
         $splashHold.Interval = [TimeSpan]::FromMilliseconds(900)
         $splashHold.add_Tick({
@@ -2392,6 +2513,7 @@ $App.UI.form.add_ContentRendered({
             $fadeAnim.add_Completed({
                 $App.UI.splashOverlay.Visibility       = "Collapsed"
                 $App.UI.splashOverlay.IsHitTestVisible = $false
+                if ($App.State.isLogsOpen) { Update-WindowSize }
             }.GetNewClosure())
             $App.UI.splashOverlay.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $fadeAnim)
             if ($null -ne $App.UI.windowOutline) {
