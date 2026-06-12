@@ -1,4 +1,4 @@
-# Tor Multiplexer For Windows
+# Tor Multiplexer For Windows (End of life) 
 ____THIS IS THE END OF LIFE OF THIS APP, PLEASE HEAD TO https://github.com/RichTiTAN/CrimsonOnion FOR THE LATEST FEATURES AND UPDATES.____
 
 
