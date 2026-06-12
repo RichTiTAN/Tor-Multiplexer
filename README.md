@@ -1,5 +1,5 @@
 # Tor Multiplexer For Windows
-__THIS IS THE END OF LIFE OF THIS APP, PLEASE HEAD TO https://github.com/RichTiTAN/CrimsonOnion FOR THE LATEST FEATURES AND UPDATES.__
+____THIS IS THE END OF LIFE OF THIS APP, PLEASE HEAD TO https://github.com/RichTiTAN/CrimsonOnion FOR THE LATEST FEATURES AND UPDATES.____
 
 
   A windows tool to run multiple tor connections and load balance them with HAProxy with a simple and feature-full UI.
